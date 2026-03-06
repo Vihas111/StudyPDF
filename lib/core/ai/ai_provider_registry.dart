@@ -7,10 +7,9 @@ import 'package:studypdf/core/ai/providers/openai_provider.dart';
 class AIProviderRegistry {
   AIProviderRegistry()
     : _providers = const {
-        'openai': OpenAIProvider(),
-        'groq': GroqProvider(),
-        'gemini': GeminiProvider(),
-        'ollama': OllamaProvider(),
+        'ChatGPT': OpenAIProvider(),
+        'Groq': GroqProvider(),
+        'Gemini': GeminiProvider(),
       };
 
   final Map<String, AIProvider> _providers;
