@@ -1,36 +1,44 @@
 # StudyPDF
 
-## Build Windows EXE Installer
+A simple windows application designed for PES students:
+-Allows easy downloading of pesu material like slides, notes, QB, etc..
+-Has an easy to use pdf viewer along with note taking section and a RAG implimentation for AI doubt clarification
+-The AI doubt clarification has 2 stages.
+    a) Uses the viewed document to obtain context and return results that clarify doubts
+    b) if results are not satisfactory enabling web search mode allows assistant to access the web and obtain results
 
-Use the packaging script:
+Steps to use:
+-Once installation is done head to settings tab on the left
+-Enter your api keys for the models you wish to use
+-(optional)Enter your web search api key and engine id
+-(pes student)Enter PESU login details
+-Head over to folder tab and add your local folders
+-Click on the download icon on the left to download pesu course materials(pesu downloader)
+  -ensure you have added your login credentials in the settings tab
+  -click on setup env
+  -then click on load courses
+  -then enter the course name or id in the search bar
+  -after selecting course click on load units and select the units which you want
+  -next under resources select the material and download format that you want and click on start download
+-After download has been completed succesfully head to folder section and add the files which you would like into the folders you want
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\windows\build_installer.ps1
-```
 
-This script:
-- builds Flutter Windows `Release` binaries
-- stages only required app/runtime files
-- stages only required `pesu_course_downloader` source files
-- excludes local/generated data (`venv`, cache, and downloaded files)
-- runs Inno Setup (if installed) to create `StudyPDF-Setup.exe`
 
-Installer output:
+Usage tips:
+Create workspaces by -> shift+right click and enter workspace name: then select all the files you want to put in the same workspace
+This allows you to launch all files at the same time(so u can place all files from a single unit into 1 workspace
+You can do this either in the folder section or in the pdf viewer section by shift+right click on a tab
 
-```text
-build\installer\dist\StudyPDF-Setup.exe
-```
+Color code tabs:
+This makes it clearer and easier to mark tabs and files by right clicking on a tab(the same color will also be applied as a bg color for the file in the folder section)
 
-## Privacy / Data Exclusion
+Create sub folders:
+Dont clutter files into a single folder sub folders will appear nested in the folder view section to help you organise your files
 
-The installer does not package your local user configurations such as:
-- AI API keys
-- web search keys
-- PESU credentials
-- recent files / workspace runtime preferences
 
-These are stored by the app in user profile storage (`SharedPreferences`) at runtime, not in installer assets.
 
-The installer also excludes PESU downloader local content:
-- `pesu_course_downloader\venv\`
-- `pesu_course_downloader\downloads\`
+Some Quality of Life features:
+Horizontal scrolling on tabs and recent files section is supported
+Support for Chatgpt, Gemini and Groq has been implemented
+
+
