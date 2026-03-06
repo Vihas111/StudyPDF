@@ -49,7 +49,8 @@ After installation:
 
 ---
 
-# PESU Downloader(For more info on this please checkout the following repository: https://github.com/ilb225112/pesu_course_downloader )
+# PESU Downloader
+### For more info on this please checkout the following repository: https://github.com/ilb225112/pesu_course_downloader
 
 StudyPDF includes a downloader for **PESU course materials**.
 
