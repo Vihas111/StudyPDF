@@ -1,4 +1,39 @@
 import 'package:flutter/material.dart';
+import 'package:studypdf/widgets/loading_phase_banner.dart';
+
+enum DownloaderPhase {
+  idle,
+  setup,
+  courses,
+  units,
+  download,
+  import,
+  done,
+  error,
+}
+
+class DownloaderUiState {
+  const DownloaderUiState({
+    required this.phase,
+    required this.title,
+    required this.subtitle,
+    required this.isBusy,
+    this.lastError,
+  });
+
+  final DownloaderPhase phase;
+  final String title;
+  final String subtitle;
+  final bool isBusy;
+  final String? lastError;
+
+  const DownloaderUiState.idle()
+    : phase = DownloaderPhase.idle,
+      title = 'Ready',
+      subtitle = 'Choose an action to begin.',
+      isBusy = false,
+      lastError = null;
+}
 
 class PesuDownloaderPage extends StatefulWidget {
   const PesuDownloaderPage({
@@ -38,8 +73,8 @@ class PesuDownloaderPage extends StatefulWidget {
 class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
   final TextEditingController _courseSearch = TextEditingController();
 
-  bool _busy = false;
-  String _status = '';
+  DownloaderUiState _uiState = const DownloaderUiState.idle();
+  String _statusDetails = '';
   List<Map<String, dynamic>> _courses = const [];
   List<Map<String, dynamic>> _units = const [];
   String? _selectedCourseId;
@@ -67,37 +102,80 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
     super.dispose();
   }
 
-  Future<void> _setup() async {
+  void _setBusy(
+    DownloaderPhase phase, {
+    required String title,
+    required String subtitle,
+  }) {
     setState(() {
-      _busy = true;
-      _status = 'Setting up downloader environment...';
+      _uiState = DownloaderUiState(
+        phase: phase,
+        title: title,
+        subtitle: subtitle,
+        isBusy: true,
+      );
+      _statusDetails = '$title\n$subtitle';
     });
+  }
+
+  void _setDone({
+    required String title,
+    required String subtitle,
+    String? details,
+  }) {
+    setState(() {
+      _uiState = DownloaderUiState(
+        phase: DownloaderPhase.done,
+        title: title,
+        subtitle: subtitle,
+        isBusy: false,
+      );
+      _statusDetails = details ?? '$title\n$subtitle';
+    });
+  }
+
+  void _setError(String message) {
+    setState(() {
+      _uiState = DownloaderUiState(
+        phase: DownloaderPhase.error,
+        title: 'Action failed',
+        subtitle: message,
+        isBusy: false,
+        lastError: message,
+      );
+      _statusDetails = message;
+    });
+  }
+
+  Future<void> _setup() async {
+    _setBusy(
+      DownloaderPhase.setup,
+      title: 'Environment is being set up',
+      subtitle: 'Creating virtual environment and installing dependencies...',
+    );
     try {
       await widget.onSetupEnvironment();
-      setState(() {
-        _status = 'Environment ready.';
-      });
+      _setDone(
+        title: 'Environment ready',
+        subtitle: 'You can now load courses.',
+      );
     } catch (e) {
-      setState(() {
-        _status = 'Setup failed: $e';
-      });
-    } finally {
-      setState(() => _busy = false);
+      _setError('Setup failed: $e');
     }
   }
 
   Future<void> _loadCourses() async {
     if (!widget.credentialsConfigured) {
-      setState(() {
-        _status =
-            'Set PESU username/password in Settings before loading courses.';
-      });
+      _setError(
+        'Set PESU username/password in Settings before loading courses.',
+      );
       return;
     }
-    setState(() {
-      _busy = true;
-      _status = 'Fetching courses...';
-    });
+    _setBusy(
+      DownloaderPhase.courses,
+      title: 'Loading courses',
+      subtitle: 'Fetching available courses from PESU...',
+    );
     try {
       final courses = await widget.onFetchCourses();
       setState(() {
@@ -107,28 +185,29 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
         _courseSearch.clear();
         _units = const [];
         _selectedUnits.clear();
-        _status = 'Loaded ${courses.length} courses.';
+        _uiState = DownloaderUiState(
+          phase: DownloaderPhase.done,
+          title: 'Courses loaded',
+          subtitle: 'Loaded ${courses.length} courses.',
+          isBusy: false,
+        );
+        _statusDetails = 'Loaded ${courses.length} courses.';
       });
     } catch (e) {
-      setState(() {
-        _status = 'Failed to fetch courses: $e';
-      });
-    } finally {
-      setState(() => _busy = false);
+      _setError('Failed to fetch courses: $e');
     }
   }
 
   Future<void> _loadUnits() async {
     if (_selectedCourseId == null) {
-      setState(() {
-        _status = 'Select a course first.';
-      });
+      _setError('Select a course first.');
       return;
     }
-    setState(() {
-      _busy = true;
-      _status = 'Fetching units...';
-    });
+    _setBusy(
+      DownloaderPhase.units,
+      title: 'Loading units',
+      subtitle: 'Fetching units for selected course...',
+    );
     try {
       final units = await widget.onFetchUnits(courseId: _selectedCourseId!);
       setState(() {
@@ -136,14 +215,21 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
         _selectedUnits
           ..clear()
           ..addAll(List.generate(units.length, (i) => i + 1));
-        _status = 'Loaded ${units.length} units.';
+        final noUnits = units.isEmpty;
+        _uiState = DownloaderUiState(
+          phase: DownloaderPhase.done,
+          title: noUnits ? 'No units found' : 'Units loaded',
+          subtitle: noUnits
+              ? 'No units were returned for the selected course.'
+              : 'Loaded ${units.length} units.',
+          isBusy: false,
+        );
+        _statusDetails = noUnits
+            ? 'No units found for selected course.'
+            : 'Loaded ${units.length} units.';
       });
     } catch (e) {
-      setState(() {
-        _status = 'Failed to fetch units: $e';
-      });
-    } finally {
-      setState(() => _busy = false);
+      _setError('Failed to fetch units: $e');
     }
   }
 
@@ -166,16 +252,14 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
         _selectedCourseName.isEmpty ||
         _selectedUnits.isEmpty ||
         _selectedResources.isEmpty) {
-      setState(() {
-        _status =
-            'Select course, units, and resource types before downloading.';
-      });
+      _setError('Select course, units, and resource types before downloading.');
       return;
     }
-    setState(() {
-      _busy = true;
-      _status = 'Downloading resources...';
-    });
+    _setBusy(
+      DownloaderPhase.download,
+      title: 'Downloading resources',
+      subtitle: 'Fetching files and running post-processing steps...',
+    );
     try {
       final message = await widget.onRunDownload(
         courseId: _selectedCourseId!,
@@ -187,16 +271,61 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
         dedup: _dedup,
         cleanup: _cleanup,
       );
-      setState(() {
-        _status = message;
-      });
+      _setDone(
+        title: 'Download complete',
+        subtitle: 'Resources are ready for import.',
+        details: message,
+      );
     } catch (e) {
-      setState(() {
-        _status = 'Download failed: $e';
-      });
-    } finally {
-      setState(() => _busy = false);
+      _setError('Download failed: $e');
     }
+  }
+
+  Future<void> _importDownloads() async {
+    _setBusy(
+      DownloaderPhase.import,
+      title: 'Importing PDFs',
+      subtitle: 'Adding downloaded PDFs into your StudyPDF library...',
+    );
+    try {
+      await widget.onImportDownloads();
+      _setDone(
+        title: 'Import complete',
+        subtitle: 'Downloaded PDFs were imported into your library.',
+      );
+    } catch (e) {
+      _setError('Import failed: $e');
+    }
+  }
+
+  LoadingBannerTone _phaseTone() {
+    switch (_uiState.phase) {
+      case DownloaderPhase.error:
+        return LoadingBannerTone.error;
+      case DownloaderPhase.done:
+        return LoadingBannerTone.success;
+      case DownloaderPhase.setup:
+      case DownloaderPhase.courses:
+      case DownloaderPhase.units:
+      case DownloaderPhase.download:
+      case DownloaderPhase.import:
+        return LoadingBannerTone.busy;
+      case DownloaderPhase.idle:
+        return LoadingBannerTone.idle;
+    }
+  }
+
+  IconData _phaseIcon() {
+    return switch (_uiState.phase) {
+      DownloaderPhase.setup => Icons.build_circle_outlined,
+      DownloaderPhase.courses => Icons.menu_book_outlined,
+      DownloaderPhase.units => Icons.topic_outlined,
+      DownloaderPhase.download => Icons.download_for_offline_outlined,
+      DownloaderPhase.import => Icons.library_add_check_outlined,
+      DownloaderPhase.done => Icons.check_circle_outline,
+      DownloaderPhase.error => Icons.error_outline,
+      DownloaderPhase.idle => Icons.info_outline,
+    };
   }
 
   @override
@@ -216,6 +345,14 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 8),
+                  LoadingPhaseBanner(
+                    title: _uiState.title,
+                    subtitle: _uiState.subtitle,
+                    tone: _phaseTone(),
+                    leadingIcon: _phaseIcon(),
+                    showBusyAnimation: _uiState.isBusy,
+                  ),
+                  const SizedBox(height: 8),
                   Text(
                     widget.credentialsConfigured
                         ? 'Credentials loaded from Settings.'
@@ -227,12 +364,12 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                     runSpacing: 8,
                     children: [
                       FilledButton.icon(
-                        onPressed: _busy ? null : _setup,
+                        onPressed: _uiState.isBusy ? null : _setup,
                         icon: const Icon(Icons.build_outlined),
                         label: const Text('Setup Env'),
                       ),
                       FilledButton.icon(
-                        onPressed: _busy ? null : _loadCourses,
+                        onPressed: _uiState.isBusy ? null : _loadCourses,
                         icon: const Icon(Icons.cloud_download_outlined),
                         label: const Text('Load Courses'),
                       ),
@@ -251,7 +388,7 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                 children: [
                   TextField(
                     controller: _courseSearch,
-                    enabled: !_busy && _courses.isNotEmpty,
+                    enabled: !_uiState.isBusy && _courses.isNotEmpty,
                     onChanged: (_) => setState(() {}),
                     decoration: InputDecoration(
                       labelText: _courses.isEmpty
@@ -292,7 +429,7 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    onTap: _busy
+                                    onTap: _uiState.isBusy
                                         ? null
                                         : () {
                                             setState(() {
@@ -315,7 +452,7 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                   ],
                   const SizedBox(height: 8),
                   FilledButton(
-                    onPressed: _busy || _selectedCourseId == null
+                    onPressed: _uiState.isBusy || _selectedCourseId == null
                         ? null
                         : _loadUnits,
                     child: const Text('Load Units'),
@@ -332,7 +469,7 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                         return FilterChip(
                           selected: selected,
                           label: Text('U$idx: $name'),
-                          onSelected: _busy
+                          onSelected: _uiState.isBusy
                               ? null
                               : (value) {
                                   setState(() {
@@ -373,7 +510,7 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                           return FilterChip(
                             selected: selected,
                             label: Text(entry.value),
-                            onSelected: _busy
+                            onSelected: _uiState.isBusy
                                 ? null
                                 : (value) {
                                     setState(() {
@@ -395,28 +532,28 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                       FilterChip(
                         selected: _convert,
                         label: const Text('Convert to PDF'),
-                        onSelected: _busy
+                        onSelected: _uiState.isBusy
                             ? null
                             : (v) => setState(() => _convert = v),
                       ),
                       FilterChip(
                         selected: _dedup,
                         label: const Text('Deduplicate'),
-                        onSelected: _busy
+                        onSelected: _uiState.isBusy
                             ? null
                             : (v) => setState(() => _dedup = v),
                       ),
                       FilterChip(
                         selected: _merge,
                         label: const Text('Merge PDFs'),
-                        onSelected: _busy
+                        onSelected: _uiState.isBusy
                             ? null
                             : (v) => setState(() => _merge = v),
                       ),
                       FilterChip(
                         selected: _cleanup,
                         label: const Text('Cleanup'),
-                        onSelected: _busy
+                        onSelected: _uiState.isBusy
                             ? null
                             : (v) => setState(() => _cleanup = v),
                       ),
@@ -428,12 +565,12 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                     runSpacing: 8,
                     children: [
                       FilledButton.icon(
-                        onPressed: _busy ? null : _runDownload,
+                        onPressed: _uiState.isBusy ? null : _runDownload,
                         icon: const Icon(Icons.download_outlined),
                         label: const Text('Start Download'),
                       ),
                       FilledButton.tonalIcon(
-                        onPressed: _busy ? null : widget.onImportDownloads,
+                        onPressed: _uiState.isBusy ? null : _importDownloads,
                         icon: const Icon(Icons.download_done_outlined),
                         label: const Text('Import Downloaded PDFs'),
                       ),
@@ -459,7 +596,7 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(width: 8),
-                      if (_busy)
+                      if (_uiState.isBusy)
                         const SizedBox(
                           width: 16,
                           height: 16,
@@ -468,7 +605,9 @@ class _PesuDownloaderPageState extends State<PesuDownloaderPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  SelectableText(_status.isEmpty ? 'No actions yet.' : _status),
+                  SelectableText(
+                    _statusDetails.isEmpty ? 'No actions yet.' : _statusDetails,
+                  ),
                 ],
               ),
             ),

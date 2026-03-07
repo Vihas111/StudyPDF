@@ -13,4 +13,9 @@ class LocalStore {
     existing.add(annotation);
     _annotationsByPage[key] = existing;
   }
+
+  void upsertAnnotation(Annotation annotation) {
+    final key = '${annotation.pdfId}:${annotation.pageNumber}';
+    _annotationsByPage[key] = <Annotation>[annotation];
+  }
 }

@@ -11,8 +11,12 @@ import 'package:studypdf/core/ai/rag/google_search_service.dart';
 import 'package:studypdf/core/ai/rag/pdf_rag_service.dart';
 import 'package:studypdf/core/storage/file_library_service.dart';
 import 'package:studypdf/core/storage/local_store.dart';
+import 'package:studypdf/core/storage/rich_notes_store.dart';
+import 'package:studypdf/core/storage/merged_notes_store.dart';
+import 'package:studypdf/models/merged_note.dart';
 import 'package:studypdf/features/downloader/presentation/pesu_downloader_page.dart';
 import 'package:studypdf/features/home/presentation/document_library_page.dart';
+import 'package:studypdf/features/notes/presentation/merged_notes_library_page.dart';
 import 'package:studypdf/features/settings/presentation/workspace_settings_page.dart';
 import 'package:studypdf/features/workspace/presentation/study_workspace_page.dart';
 import 'package:studypdf/models/annotation.dart';
@@ -63,7 +67,7 @@ class _StudyPdfAppState extends State<StudyPdfApp> {
   }
 }
 
-enum AppSection { home, workspace, downloader, settings }
+enum AppSection { home, workspace, downloader, notes, settings }
 
 class StudyShellPage extends StatefulWidget {
   const StudyShellPage({super.key, required this.onThemeModeChanged});
@@ -76,6 +80,8 @@ class StudyShellPage extends StatefulWidget {
 
 class _StudyShellPageState extends State<StudyShellPage> {
   final LocalStore _store = LocalStore();
+  final RichNotesStore _richNotesStore = RichNotesStore();
+  final MergedNotesStore _mergedNotesStore = MergedNotesStore();
   final AIProviderRegistry _providerRegistry = AIProviderRegistry();
   final GoogleSearchService _googleSearchService = GoogleSearchService();
   final PdfRagService _ragService = PdfRagService();
@@ -92,6 +98,7 @@ class _StudyShellPageState extends State<StudyShellPage> {
   String _groqApiKey = '';
   String _geminiApiKey = '';
   String _defaultAiProviderId = 'openai';
+  String _activeAiProviderId = 'openai';
   bool _webSearchEnabled = false;
   String _googleSearchApiKey = '';
   String _googleSearchCx = '';
@@ -167,7 +174,12 @@ class _StudyShellPageState extends State<StudyShellPage> {
               DateTime.tryParse(data['createdAt'] as String? ?? '') ??
               DateTime.now(),
         );
-        _store.addAnnotation(annotation);
+        _store.upsertAnnotation(annotation);
+        await _richNotesStore.upsertNote(
+          pdfId: annotation.pdfId,
+          pageNumber: annotation.pageNumber,
+          deltaJson: _toPlainTextDeltaJson(annotation.content),
+        );
         if (_activeDocument?.id == annotation.pdfId &&
             _viewport.currentPage == annotation.pageNumber) {
           _refreshAnnotations();
@@ -182,6 +194,10 @@ class _StudyShellPageState extends State<StudyShellPage> {
       if (call.method == 'externalAiOutputUpdated') {
         final data = (call.arguments as Map).cast<String, dynamic>();
         final text = data['assistantOutput'] as String? ?? '';
+        final providerId = data['providerId'] as String? ?? '';
+        if (providerId.isNotEmpty && providerId != _activeAiProviderId) {
+          _activeAiProviderId = providerId;
+        }
         if (text.isNotEmpty) {
           _assistantOutput = text;
           if (mounted) {
@@ -192,11 +208,23 @@ class _StudyShellPageState extends State<StudyShellPage> {
         return {'ok': true};
       }
 
+      if (call.method == 'externalAiProviderChanged') {
+        final data = (call.arguments as Map).cast<String, dynamic>();
+        final providerId = data['providerId'] as String? ?? '';
+        if (providerId.isNotEmpty) {
+          _handleAiProviderChanged(providerId);
+          return {'ok': true};
+        }
+        return {'ok': false};
+      }
+
       return null;
     });
   }
 
   Future<void> _initialize() async {
+    await _richNotesStore.load();
+    await _mergedNotesStore.load();
     await _loadAppPreferences();
     _libraryRoot = await _fileLibraryService.getRootPath();
     await _reloadLibrary();
@@ -215,6 +243,7 @@ class _StudyShellPageState extends State<StudyShellPage> {
     _geminiApiKey = prefs.getString('ai.geminiApiKey') ?? '';
     final rawDefault = prefs.getString('ai.defaultProviderId') ?? 'openai';
     _defaultAiProviderId = rawDefault == 'anthropic' ? 'groq' : rawDefault;
+    _activeAiProviderId = _defaultAiProviderId;
     _webSearchEnabled = prefs.getBool('ai.webSearchEnabled') ?? false;
     _googleSearchApiKey = prefs.getString('ai.googleSearchApiKey') ?? '';
     _googleSearchCx = prefs.getString('ai.googleSearchEngineId') ?? '';
@@ -226,15 +255,18 @@ class _StudyShellPageState extends State<StudyShellPage> {
       await _fileLibraryService.setRootPath(customRoot);
     }
 
-    final orientationRaw =
+    final legacyNotesOrientation =
         prefs.getString('workspace.notesOrientation') ?? 'bottom';
+    final aiDockRaw = prefs.getString('workspace.aiDockPosition') ?? 'right';
+    final notesDockRaw =
+        prefs.getString('workspace.notesDockPosition') ??
+        (legacyNotesOrientation == 'right' ? 'right' : 'bottom');
     final startAi = prefs.getBool('workspace.startWithAiVisible') ?? true;
     final startNotes = prefs.getBool('workspace.startWithNotesVisible') ?? true;
 
     _workspacePreferences = WorkspacePreferences(
-      notesOrientation: orientationRaw == 'right'
-          ? NotesDockOrientation.right
-          : NotesDockOrientation.bottom,
+      aiDockPosition: _panelDockPositionFromRaw(aiDockRaw),
+      notesDockPosition: _panelDockPositionFromRaw(notesDockRaw),
       startWithAiVisible: startAi,
       startWithNotesVisible: startNotes,
     );
@@ -290,10 +322,12 @@ class _StudyShellPageState extends State<StudyShellPage> {
   Future<void> _updateWorkspacePreferences(WorkspacePreferences updated) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-      'workspace.notesOrientation',
-      updated.notesOrientation == NotesDockOrientation.right
-          ? 'right'
-          : 'bottom',
+      'workspace.aiDockPosition',
+      _panelDockPositionToRaw(updated.aiDockPosition),
+    );
+    await prefs.setString(
+      'workspace.notesDockPosition',
+      _panelDockPositionToRaw(updated.notesDockPosition),
     );
     await prefs.setBool(
       'workspace.startWithAiVisible',
@@ -308,6 +342,29 @@ class _StudyShellPageState extends State<StudyShellPage> {
       setState(() {
         _workspacePreferences = updated;
       });
+    }
+  }
+
+  PanelDockPosition _panelDockPositionFromRaw(String raw) {
+    switch (raw) {
+      case 'left':
+        return PanelDockPosition.left;
+      case 'bottom':
+        return PanelDockPosition.bottom;
+      case 'right':
+      default:
+        return PanelDockPosition.right;
+    }
+  }
+
+  String _panelDockPositionToRaw(PanelDockPosition value) {
+    switch (value) {
+      case PanelDockPosition.left:
+        return 'left';
+      case PanelDockPosition.bottom:
+        return 'bottom';
+      case PanelDockPosition.right:
+        return 'right';
     }
   }
 
@@ -412,7 +469,22 @@ class _StudyShellPageState extends State<StudyShellPage> {
     }
     setState(() {
       _defaultAiProviderId = providerId;
+      _activeAiProviderId = providerId;
     });
+  }
+
+  void _handleAiProviderChanged(String providerId) {
+    if (_activeAiProviderId == providerId) {
+      return;
+    }
+    if (!mounted) {
+      _activeAiProviderId = providerId;
+      return;
+    }
+    setState(() {
+      _activeAiProviderId = providerId;
+    });
+    _broadcastAiState();
   }
 
   Future<void> _updatePesuCredentials({
@@ -1086,6 +1158,249 @@ class _StudyShellPageState extends State<StudyShellPage> {
     setState(() {});
   }
 
+  void _openMergedNote(MergedNote note) {
+    final pseudoDoc = PdfDocument(
+      id: 'note-${note.id}',
+      path: 'note://${note.id}',
+      title: 'Notes: ${note.pdfTitle}',
+      lastOpened: DateTime.now(),
+    );
+    if (!_openTabs.any((tab) => tab.id == pseudoDoc.id)) {
+      _openTabs = [..._openTabs, pseudoDoc];
+    }
+    _activeTabId = pseudoDoc.id;
+    _restoreViewportForActiveDocument();
+    _section = AppSection.workspace;
+    setState(() {});
+  }
+
+  Future<void> _mergeNotesForTab(String documentId) async {
+    PdfDocument? doc;
+    for (final d in _documents) {
+      if (d.id == documentId) doc = d;
+    }
+    if (doc == null) {
+      for (final d in _openTabs) {
+        if (d.id == documentId) doc = d;
+      }
+    }
+    if (doc == null) return;
+    
+    final notes = await _richNotesStore.getNotesForPdf(documentId);
+    final buffer = StringBuffer();
+    buffer.writeln('# Notes for ${doc.title}\n');
+    
+    if (notes.isEmpty) {
+      buffer.writeln('No notes have been added to this document yet.');
+    } else {
+      buffer.writeln('## Agenda');
+      for (final note in notes) {
+        buffer.writeln('- [Page ${note.pageNumber}](#page-${note.pageNumber})');
+      }
+      buffer.writeln('\n---');
+      
+      for (final note in notes) {
+        buffer.writeln('\n## Page ${note.pageNumber}');
+        buffer.writeln(_deltaJsonToPlainText(note.deltaJson));
+      }
+    }
+    
+    final existing = _mergedNotesStore.getNoteByPdfId(documentId);
+    final merged = MergedNote(
+      id: existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+      pdfId: documentId,
+      pdfTitle: doc.title,
+      markdownContent: buffer.toString(),
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    
+    await _mergedNotesStore.saveNote(merged);
+    _openMergedNote(merged);
+  }
+
+  Future<void> _mergeNotesForGroup(String groupName, List<String> tabIds) async {
+    final buffer = StringBuffer();
+    buffer.writeln('# Master Notes for $groupName\n');
+    
+    // First pass to build master agenda
+    buffer.writeln('## Master Agenda');
+    for (final tabId in tabIds) {
+      PdfDocument? doc;
+      for (final d in _documents) {
+        if (d.id == tabId) doc = d;
+      }
+      if (doc == null) {
+        for (final d in _openTabs) {
+          if (d.id == tabId) doc = d;
+        }
+      }
+      if (doc == null) continue;
+
+      final notes = await _richNotesStore.getNotesForPdf(doc.id);
+      if (notes.isEmpty) continue;
+
+      final docTitleEncoded = Uri.encodeComponent(doc.title);
+      buffer.writeln('- [${doc.title}](#doc=$docTitleEncoded)');
+      
+      for (final note in notes) {
+        buffer.writeln('  - [Page ${note.pageNumber}](#doc=$docTitleEncoded&page=${note.pageNumber})');
+      }
+    }
+    buffer.writeln('\n---\n');
+
+    // Second pass to write content
+    bool hasAnyNotes = false;
+    for (final tabId in tabIds) {
+      PdfDocument? doc;
+      for (final d in _documents) {
+        if (d.id == tabId) doc = d;
+      }
+      if (doc == null) {
+        for (final d in _openTabs) {
+          if (d.id == tabId) doc = d;
+        }
+      }
+      if (doc == null) continue;
+
+      final notes = await _richNotesStore.getNotesForPdf(doc.id);
+      if (notes.isEmpty) continue;
+
+      hasAnyNotes = true;
+      buffer.writeln('## ${doc.title}');
+      
+      for (final note in notes) {
+        buffer.writeln('\n### Page ${note.pageNumber}');
+        buffer.writeln(_deltaJsonToPlainText(note.deltaJson));
+      }
+      buffer.writeln('\n---\n');
+    }
+
+    if (!hasAnyNotes) {
+      buffer.writeln('No notes have been added to any documents in this workspace yet.');
+    }
+
+    // Using the group name mapped into an ID string to ensure replacement
+    final pseudoNoteId = 'group-${groupName.replaceAll(RegExp(r'\s+'), '_')}';
+    final existing = _mergedNotesStore.getNoteById(pseudoNoteId);
+    
+    final merged = MergedNote(
+      id: pseudoNoteId,
+      pdfId: 'group', // Re-use pdfId to store a marker for group
+      pdfTitle: 'Master: $groupName',
+      markdownContent: buffer.toString(),
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    
+    await _mergedNotesStore.saveNote(merged);
+    _openMergedNote(merged);
+  }
+
+  Future<void> _saveMergedNote(String text) async {
+    final activeDoc = _activeDocument;
+    if (activeDoc == null || !activeDoc.id.startsWith('note-')) return;
+    
+    final noteId = activeDoc.id.substring(5);
+    final existing = _mergedNotesStore.getNoteById(noteId);
+    if (existing != null) {
+      final updated = existing.copyWith(
+        markdownContent: text,
+        updatedAt: DateTime.now(),
+      );
+      await _mergedNotesStore.saveNote(updated);
+
+      // Two-way sync: Update page notes in RichNotesStore
+      await _syncMarkdownToRichNotes(text);
+
+      setState(() {});
+    }
+  }
+
+  Future<void> _syncMarkdownToRichNotes(String markdown) async {
+    final lines = markdown.split('\n');
+    String? currentPdfId;
+    int? currentPage;
+    final StringBuffer currentText = StringBuffer();
+
+    Future<void> saveCurrentBuffer() async {
+      final docId = currentPdfId;
+      final page = currentPage;
+      if (docId != null && page != null && currentText.isNotEmpty) {
+        final content = currentText.toString().trim();
+        if (content.isNotEmpty) {
+           await _richNotesStore.upsertNote(
+             pdfId: docId,
+             pageNumber: page,
+             deltaJson: _toPlainTextDeltaJson(content),
+           );
+        }
+      }
+      currentText.clear();
+    }
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (line.startsWith('## ') && !line.startsWith('### ') && !line.startsWith('## Agenda') && !line.startsWith('## Master')) {
+        // Discovered a document title
+        await saveCurrentBuffer();
+        currentPage = null;
+        
+        final title = line.substring(3).trim();
+        PdfDocument? targetDoc;
+        for (final doc in _documents) {
+          if (doc.title == title) targetDoc = doc;
+        }
+        if (targetDoc == null) {
+          for (final doc in _openTabs) {
+             if (doc.title == title) targetDoc = doc;
+          }
+        }
+        currentPdfId = targetDoc?.id;
+      } else if (line.startsWith('### Page ') && currentPdfId != null) {
+        // Discovered a page header
+        await saveCurrentBuffer();
+        final numStr = line.substring(9).trim();
+        final parsed = int.tryParse(numStr);
+        if (parsed != null) {
+          currentPage = parsed;
+        } else {
+          currentPage = null;
+        }
+      } else if (currentPage != null && currentPdfId != null) {
+        // Accumulate page content, ignoring divider dashes 
+        if (line.trim() != '---') {
+           currentText.writeln(line);
+        }
+      }
+    }
+    
+    // Save trailing buffer
+    await saveCurrentBuffer();
+    _refreshAnnotations(); 
+    _broadcastNotesState();
+  }
+
+  Future<void> _renameMergedNote(String noteId, String newTitle) async {
+    final existing = _mergedNotesStore.getNoteById(noteId);
+    if (existing != null) {
+      final updated = existing.copyWith(
+        pdfTitle: newTitle,
+        updatedAt: DateTime.now(),
+      );
+      await _mergedNotesStore.saveNote(updated);
+
+      final tabId = 'note-$noteId';
+      _openTabs = _openTabs.map((t) {
+        if (t.id == tabId) {
+          return t.copyWith(title: 'Notes: $newTitle');
+        }
+        return t;
+      }).toList(growable: false);
+      setState(() {});
+    }
+  }
+
   void _closeTab(String documentId) {
     _openTabs = _openTabs.where((tab) => tab.id != documentId).toList();
     if (_activeTabId == documentId) {
@@ -1161,6 +1476,9 @@ class _StudyShellPageState extends State<StudyShellPage> {
   }) async {
     final active = _activeDocument;
     try {
+      if (providerId != _activeAiProviderId) {
+        _activeAiProviderId = providerId;
+      }
       final currentPage = _viewport.currentPage;
       final currentPageText = _viewport.pageText.trim();
       String ragContext =
@@ -1266,6 +1584,13 @@ $citationHint
       'pageNumber': _viewport.currentPage,
       'pageText': _viewport.pageText,
       'assistantOutput': _assistantOutput,
+      'themeMode': _themeModeToString(_themeMode),
+      'activeAiProviderId': _activeAiProviderId,
+      'apiKeys': {
+        'openai': _openAiApiKey,
+        'groq': _groqApiKey,
+        'gemini': _geminiApiKey,
+      },
     });
 
     final window = await DesktopMultiWindow.createWindow(payload);
@@ -1307,20 +1632,26 @@ $citationHint
       ..show();
   }
 
-  void _saveAnnotation(String text) {
+  void _saveAnnotation(String text) async {
     final activeDocument = _activeDocument;
     if (activeDocument == null || text.trim().isEmpty) {
       return;
     }
+    final trimmed = text.trim();
 
-    _store.addAnnotation(
+    _store.upsertAnnotation(
       Annotation(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         pdfId: activeDocument.id,
         pageNumber: _viewport.currentPage,
-        content: text.trim(),
+        content: trimmed,
         createdAt: DateTime.now(),
       ),
+    );
+    await _richNotesStore.upsertNote(
+      pdfId: activeDocument.id,
+      pageNumber: _viewport.currentPage,
+      deltaJson: _toPlainTextDeltaJson(trimmed),
     );
 
     _refreshAnnotations();
@@ -1328,10 +1659,52 @@ $citationHint
     setState(() {});
   }
 
+  String _toPlainTextDeltaJson(String text) {
+    final normalized = text.endsWith('\n') ? text : '$text\n';
+    return jsonEncode([
+      {'insert': normalized},
+    ]);
+  }
+
+  String _deltaJsonToPlainText(String deltaJson) {
+    try {
+      final decoded = jsonDecode(deltaJson);
+      if (decoded is! List) {
+        return deltaJson;
+      }
+      final buffer = StringBuffer();
+      for (final op in decoded) {
+        if (op is Map && op['insert'] is String) {
+          buffer.write(op['insert'] as String);
+        }
+      }
+      return buffer.toString().trim();
+    } catch (_) {
+      return deltaJson;
+    }
+  }
+
   void _refreshAnnotations() {
     final activeDocument = _activeDocument;
     if (activeDocument == null) {
       _pageAnnotations = const [];
+      return;
+    }
+    final rich = _richNotesStore.peekNote(
+      pdfId: activeDocument.id,
+      pageNumber: _viewport.currentPage,
+    );
+    if (rich != null && rich.deltaJson.trim().isNotEmpty) {
+      _pageAnnotations = <Annotation>[
+        Annotation(
+          id: rich.id,
+          pdfId: activeDocument.id,
+          pageNumber: _viewport.currentPage,
+          content: _deltaJsonToPlainText(rich.deltaJson),
+          createdAt: rich.updatedAt,
+        ),
+      ];
+      _store.upsertAnnotation(_pageAnnotations.first);
       return;
     }
     _pageAnnotations = _store.getAnnotations(
@@ -1375,6 +1748,13 @@ $citationHint
         'pageNumber': _viewport.currentPage,
         'pageText': _viewport.pageText,
         'assistantOutput': _assistantOutput,
+        'themeMode': _themeModeToString(_themeMode),
+        'activeAiProviderId': _activeAiProviderId,
+        'apiKeys': {
+          'openai': _openAiApiKey,
+          'groq': _groqApiKey,
+          'gemini': _geminiApiKey,
+        },
       });
     } catch (_) {
       _externalAiWindowIds.remove(id);
@@ -1435,7 +1815,7 @@ $citationHint
           ExplainPageIntent: CallbackAction<ExplainPageIntent>(
             onInvoke: (_) {
               _runAssistant(
-                providerId: _defaultAiProviderId,
+                providerId: _activeAiProviderId,
                 prompt: 'Explain this page',
               );
               return null;
@@ -1500,6 +1880,10 @@ $citationHint
                     label: Text('Downloads'),
                   ),
                   NavigationRailDestination(
+                    icon: Icon(Icons.edit_document),
+                    label: Text('Notes'),
+                  ),
+                  NavigationRailDestination(
                     icon: Icon(Icons.settings_outlined),
                     label: Text('Settings'),
                   ),
@@ -1533,6 +1917,7 @@ $citationHint
                           StudyWorkspacePage(
                             openTabs: _openTabs,
                             activeTabId: _activeTabId,
+                            activeMergedNote: _activeDocument?.id.startsWith('note-') == true ? _mergedNotesStore.getNoteById(_activeDocument!.id.substring(5)) : null,
                             viewportData: _viewport,
                             pageAnnotations: _pageAnnotations,
                             assistantOutput: _assistantOutput,
@@ -1543,16 +1928,23 @@ $citationHint
                             onViewportChanged: _onViewportChanged,
                             onRunPrompt: _runAssistant,
                             onSaveNote: _saveAnnotation,
+                            onMergeNotes: _mergeNotesForTab,
+                            onMergeGroupNotes: _mergeNotesForGroup,
+                            onSaveMergedNote: _saveMergedNote,
+                            onRenameMergedNote: _renameMergedNote,
                             activeDocument: _activeDocument,
                             onOpenExternalAiWindow: _openExternalAiWindow,
                             onOpenExternalNotesWindow: _openExternalNotesWindow,
-                            notesOrientation:
-                                _workspacePreferences.notesOrientation,
+                            aiDockPosition:
+                                _workspacePreferences.aiDockPosition,
+                            notesDockPosition:
+                                _workspacePreferences.notesDockPosition,
                             defaultAiVisible:
                                 _workspacePreferences.startWithAiVisible,
                             defaultNotesVisible:
                                 _workspacePreferences.startWithNotesVisible,
-                            defaultAiProviderId: _defaultAiProviderId,
+                            activeAiProviderId: _activeAiProviderId,
+                            onAiProviderChanged: _handleAiProviderChanged,
                             onCreateHomeShortcut: _createWorkspaceShortcut,
                             onDeleteHomeShortcutByName:
                                 _deleteWorkspaceShortcutByName,
@@ -1573,6 +1965,10 @@ $citationHint
                             onFetchUnits: _fetchPesuUnits,
                             onRunDownload: _runPesuDownload,
                             onImportDownloads: _importDownloaderPdfs,
+                          ),
+                          MergedNotesLibraryPage(
+                            store: _mergedNotesStore,
+                            onOpenNote: _openMergedNote,
                           ),
                           WorkspaceSettingsPage(
                             preferences: _workspacePreferences,

@@ -91,6 +91,112 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     _webSearchEnabled = widget.webSearchEnabled;
   }
 
+  String _dockLabel(PanelDockPosition position) {
+    switch (position) {
+      case PanelDockPosition.left:
+        return 'Left of PDF';
+      case PanelDockPosition.right:
+        return 'Right of PDF';
+      case PanelDockPosition.bottom:
+        return 'Bottom of PDF';
+    }
+  }
+
+  Widget _layoutPreview() {
+    Widget panelChip(String text, Color color) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(text, style: const TextStyle(fontSize: 11)),
+      );
+    }
+
+    final ai = panelChip('AI', Colors.lightBlue.withValues(alpha: 0.30));
+    final notes = panelChip('Notes', Colors.orange.withValues(alpha: 0.30));
+    final center = Expanded(
+      child: Container(
+        height: 80,
+        decoration: BoxDecoration(
+          border: Border.all(color: Theme.of(context).dividerColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Center(child: Text('PDF')),
+      ),
+    );
+
+    Widget sideColumn(List<Widget> children) {
+      if (children.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      return SizedBox(
+        width: 84,
+        child: Column(
+          children: children
+              .map(
+                (w) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: w,
+                ),
+              )
+              .toList(growable: false),
+        ),
+      );
+    }
+
+    final left = <Widget>[];
+    final right = <Widget>[];
+    final bottom = <Widget>[];
+
+    void place(Widget w, PanelDockPosition p) {
+      switch (p) {
+        case PanelDockPosition.left:
+          left.add(w);
+          break;
+        case PanelDockPosition.right:
+          right.add(w);
+          break;
+        case PanelDockPosition.bottom:
+          bottom.add(w);
+          break;
+      }
+    }
+
+    place(ai, widget.preferences.aiDockPosition);
+    place(notes, widget.preferences.notesDockPosition);
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Layout preview', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              sideColumn(left),
+              if (left.isNotEmpty) const SizedBox(width: 8),
+              center,
+              if (right.isNotEmpty) const SizedBox(width: 8),
+              sideColumn(right),
+            ],
+          ),
+          if (bottom.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 6, runSpacing: 6, children: bottom),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   void didUpdateWidget(covariant WorkspaceSettingsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -218,6 +324,7 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     required BuildContext context,
     required String title,
     required List<Widget> children,
+    Widget? trailing,
   }) {
     return Card(
       child: Padding(
@@ -225,11 +332,77 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleLarge),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                if (trailing != null) trailing,
+              ],
+            ),
             const SizedBox(height: 14),
             ...children,
           ],
         ),
+      ),
+    );
+  }
+
+  void _showAiApiHelpDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Where to get AI API keys'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('OpenAI: platform.openai.com/api-keys'),
+            SizedBox(height: 6),
+            Text('Groq: console.groq.com/keys'),
+            SizedBox(height: 6),
+            Text('Gemini: aistudio.google.com/app/apikey'),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showWebSearchHelpDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Where to get Web Search keys'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('1. Enable Custom Search JSON API in Google Cloud.'),
+            SizedBox(height: 6),
+            Text('2. Create an API key in Google Cloud Console.'),
+            SizedBox(height: 6),
+            Text('3. Create a Programmable Search Engine and copy its CX ID.'),
+            SizedBox(height: 6),
+            Text('Google Cloud: console.cloud.google.com'),
+            SizedBox(height: 4),
+            Text('Programmable Search: programmablesearchengine.google.com'),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -285,6 +458,11 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                     _settingsCard(
                       context: context,
                       title: 'AI Settings',
+                      trailing: IconButton(
+                        tooltip: 'Where to get API keys',
+                        onPressed: _showAiApiHelpDialog,
+                        icon: const Icon(Icons.help_outline),
+                      ),
                       children: [
                         _apiKeyField(
                           controller: _openAiController,
@@ -331,18 +509,29 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text('Enable web search fallback'),
-                          subtitle: const Text(
-                            'Uses Google Custom Search snippets when PDF context is not enough.',
-                          ),
-                          value: _webSearchEnabled,
-                          onChanged: (value) {
-                            setState(() {
-                              _webSearchEnabled = value;
-                            });
-                          },
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Enable web search fallback'),
+                                subtitle: const Text(
+                                  'Uses Google Custom Search snippets when PDF context is not enough.',
+                                ),
+                                value: _webSearchEnabled,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _webSearchEnabled = value;
+                                  });
+                                },
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Where to get Web Search keys',
+                              onPressed: _showWebSearchHelpDialog,
+                              icon: const Icon(Icons.help_outline),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 8),
                         TextField(
@@ -421,33 +610,59 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                           },
                         ),
                         const SizedBox(height: 12),
-                        DropdownButtonFormField<NotesDockOrientation>(
-                          initialValue: widget.preferences.notesOrientation,
+                        DropdownButtonFormField<PanelDockPosition>(
+                          initialValue: widget.preferences.aiDockPosition,
                           decoration: const InputDecoration(
-                            labelText: 'Notes dock orientation',
+                            labelText: 'AI panel dock position',
                             border: OutlineInputBorder(),
                           ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: NotesDockOrientation.bottom,
-                              child: Text('Bottom of PDF'),
-                            ),
-                            DropdownMenuItem(
-                              value: NotesDockOrientation.right,
-                              child: Text('Right of PDF'),
-                            ),
-                          ],
+                          items: PanelDockPosition.values
+                              .map(
+                                (value) => DropdownMenuItem(
+                                  value: value,
+                                  child: Text(_dockLabel(value)),
+                                ),
+                              )
+                              .toList(growable: false),
                           onChanged: (value) {
                             if (value == null) {
                               return;
                             }
                             widget.onChanged(
                               widget.preferences.copyWith(
-                                notesOrientation: value,
+                                aiDockPosition: value,
                               ),
                             );
                           },
                         ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<PanelDockPosition>(
+                          initialValue: widget.preferences.notesDockPosition,
+                          decoration: const InputDecoration(
+                            labelText: 'Notes panel dock position',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: PanelDockPosition.values
+                              .map(
+                                (value) => DropdownMenuItem(
+                                  value: value,
+                                  child: Text(_dockLabel(value)),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) {
+                            if (value == null) {
+                              return;
+                            }
+                            widget.onChanged(
+                              widget.preferences.copyWith(
+                                notesDockPosition: value,
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        _layoutPreview(),
                         const SizedBox(height: 12),
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,

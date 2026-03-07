@@ -20,6 +20,18 @@ class ExternalPanelApp extends StatelessWidget {
     } catch (_) {
       payload = {'panel': 'unknown'};
     }
+    ThemeMode themeModeFromRaw(String raw) {
+      switch (raw) {
+        case 'dark':
+          return ThemeMode.dark;
+        case 'light':
+          return ThemeMode.light;
+        default:
+          return ThemeMode.system;
+      }
+    }
+
+    final themeRaw = payload['themeMode']?.toString() ?? 'system';
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -28,6 +40,14 @@ class ExternalPanelApp extends StatelessWidget {
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF255F85)),
       ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          brightness: Brightness.dark,
+          seedColor: const Color(0xFF255F85),
+        ),
+      ),
+      themeMode: themeModeFromRaw(themeRaw),
       home: _ExternalPanelScreen(payload: payload),
     );
   }
@@ -50,6 +70,8 @@ class _ExternalPanelScreenState extends State<_ExternalPanelScreen> {
   String _documentTitle = 'Document';
   int _pageNumber = 1;
   String _pageText = '';
+  String _activeAiProviderId = 'openai';
+  Map<String, String> _apiKeys = <String, String>{};
 
   @override
   void initState() {
@@ -81,6 +103,14 @@ class _ExternalPanelScreenState extends State<_ExternalPanelScreen> {
     _documentTitle = payload['documentTitle'] as String? ?? _documentTitle;
     _pageNumber = payload['pageNumber'] as int? ?? _pageNumber;
     _pageText = payload['pageText'] as String? ?? _pageText;
+    _activeAiProviderId =
+        payload['activeAiProviderId'] as String? ?? _activeAiProviderId;
+    final rawKeys = payload['apiKeys'];
+    if (rawKeys is Map) {
+      _apiKeys = rawKeys.map(
+        (key, value) => MapEntry(key.toString(), value?.toString() ?? ''),
+      );
+    }
     final rawNotes = payload['annotations'] as List<dynamic>? ?? const [];
     _notes = rawNotes
         .map((item) {
@@ -113,14 +143,25 @@ class _ExternalPanelScreenState extends State<_ExternalPanelScreen> {
         child: switch (_panel) {
           'ai' => AIAssistantPanel(
             providers: _providerRegistry.all,
+            initialProviderId: _activeAiProviderId,
+            onProviderChanged: (providerId) {
+              _activeAiProviderId = providerId;
+              DesktopMultiWindow.invokeMethod(0, 'externalAiProviderChanged', {
+                'providerId': providerId,
+              });
+            },
             onRunPrompt: ({required providerId, required prompt}) async {
               final response = await _providerRegistry
                   .resolve(providerId)
-                  .sendPrompt(prompt: prompt, context: _pageText);
+                  .sendPrompt(
+                    prompt: prompt,
+                    context: _pageText,
+                    apiKey: _apiKeys[providerId],
+                  );
               await DesktopMultiWindow.invokeMethod(
                 0,
                 'externalAiOutputUpdated',
-                {'assistantOutput': response},
+                {'assistantOutput': response, 'providerId': providerId},
               );
               return response;
             },

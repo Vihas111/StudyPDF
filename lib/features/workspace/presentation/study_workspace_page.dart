@@ -7,6 +7,8 @@ import 'package:studypdf/features/notes/presentation/page_notes_panel.dart';
 import 'package:studypdf/features/pdf_viewer/presentation/pdf_viewer_panel.dart';
 import 'package:studypdf/features/tabs/presentation/tab_strip.dart';
 import 'package:studypdf/models/annotation.dart';
+import 'package:studypdf/models/merged_note.dart';
+import 'package:studypdf/features/notes/presentation/merged_note_editor_panel.dart';
 import 'package:studypdf/models/pdf_document.dart';
 import 'package:studypdf/models/pdf_viewport_data.dart';
 import 'package:studypdf/models/tab_group.dart';
@@ -23,6 +25,7 @@ class StudyWorkspacePage extends StatefulWidget {
     required this.activeTabId,
     required this.activeDocument,
     required this.viewportData,
+    this.activeMergedNote,
     required this.pageAnnotations,
     required this.assistantOutput,
     required this.providers,
@@ -32,12 +35,18 @@ class StudyWorkspacePage extends StatefulWidget {
     required this.onViewportChanged,
     required this.onRunPrompt,
     required this.onSaveNote,
+    required this.onMergeNotes,
+    required this.onMergeGroupNotes,
+    required this.onSaveMergedNote,
+    required this.onRenameMergedNote,
     required this.onOpenExternalAiWindow,
     required this.onOpenExternalNotesWindow,
-    required this.notesOrientation,
+    required this.aiDockPosition,
+    required this.notesDockPosition,
     required this.defaultAiVisible,
     required this.defaultNotesVisible,
-    required this.defaultAiProviderId,
+    required this.activeAiProviderId,
+    required this.onAiProviderChanged,
     required this.onCreateHomeShortcut,
     required this.onDeleteHomeShortcutByName,
     required this.onRenameHomeShortcutByName,
@@ -50,6 +59,7 @@ class StudyWorkspacePage extends StatefulWidget {
   final String? activeTabId;
   final PdfDocument? activeDocument;
   final PdfViewportData viewportData;
+  final MergedNote? activeMergedNote;
   final List<Annotation> pageAnnotations;
   final String assistantOutput;
   final List<AIProvider> providers;
@@ -63,12 +73,18 @@ class StudyWorkspacePage extends StatefulWidget {
   })
   onRunPrompt;
   final ValueChanged<String> onSaveNote;
+  final ValueChanged<String> onMergeNotes;
+  final void Function(String groupName, List<String> tabIds) onMergeGroupNotes;
+  final ValueChanged<String> onSaveMergedNote;
+  final void Function(String noteId, String newTitle) onRenameMergedNote;
   final Future<void> Function() onOpenExternalAiWindow;
   final Future<void> Function() onOpenExternalNotesWindow;
-  final NotesDockOrientation notesOrientation;
+  final PanelDockPosition aiDockPosition;
+  final PanelDockPosition notesDockPosition;
   final bool defaultAiVisible;
   final bool defaultNotesVisible;
-  final String defaultAiProviderId;
+  final String activeAiProviderId;
+  final ValueChanged<String> onAiProviderChanged;
   final Future<bool> Function({
     required String name,
     required List<String> tabIds,
@@ -92,7 +108,8 @@ class StudyWorkspacePage extends StatefulWidget {
 }
 
 class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
-  double _leftPanelRatio = 0.64;
+  double _leftDockWidth = 340;
+  double _rightDockWidth = 360;
   double _topPanelRatio = 0.66;
 
   late bool _aiVisible;
@@ -154,7 +171,8 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
 
   void _resetLayout() {
     setState(() {
-      _leftPanelRatio = 0.64;
+      _leftDockWidth = 340;
+      _rightDockWidth = 360;
       _topPanelRatio = 0.66;
       _aiVisible = widget.defaultAiVisible;
       _notesVisible = widget.defaultNotesVisible;
@@ -379,6 +397,10 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
           child: Text('Add shortcut to Home'),
         ),
         PopupMenuItem<String>(
+          value: 'mergenotes',
+          child: Text('Merge Notes'),
+        ),
+        PopupMenuItem<String>(
           value: 'close',
           child: Text('Close workspace tabs'),
         ),
@@ -427,6 +449,11 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
       return;
     }
 
+    if (action == 'mergenotes') {
+      widget.onMergeGroupNotes(group.name, group.tabIds);
+      return;
+    }
+
     if (action == 'close') {
       _closeWorkspaceTabs(group.id);
       return;
@@ -452,12 +479,18 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
         globalPosition.dx,
         globalPosition.dy,
       ),
-      items: const [
-        PopupMenuItem<String>(value: 'color', child: Text('Change tab color')),
-        PopupMenuItem<String>(value: 'reset', child: Text('Reset tab color')),
+      items: [
+        if (!tabId.startsWith('note-'))
+          const PopupMenuItem<String>(value: 'mergenotes', child: Text('Merge Notes')),
+        const PopupMenuItem<String>(value: 'color', child: Text('Change tab color')),
+        const PopupMenuItem<String>(value: 'reset', child: Text('Reset tab color')),
       ],
     );
     if (action == null) {
+      return;
+    }
+    if (action == 'mergenotes') {
+      widget.onMergeNotes(tabId);
       return;
     }
     if (action == 'color') {
@@ -641,19 +674,27 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
     final aiPanel = AIAssistantPanel(
       providers: widget.providers,
       onRunPrompt: widget.onRunPrompt,
-      initialProviderId: widget.defaultAiProviderId,
+      initialProviderId: widget.activeAiProviderId,
+      onProviderChanged: widget.onAiProviderChanged,
     );
     final notesPanel = PageNotesPanel(
       pageNumber: widget.viewportData.currentPage,
       annotations: widget.pageAnnotations,
       onSave: widget.onSaveNote,
     );
-    final pdfPanel = PdfViewerPanel(
-      key: ValueKey('pdf-${widget.activeDocument!.id}'),
-      document: widget.activeDocument!,
-      onViewportChanged: widget.onViewportChanged,
-      initialPage: widget.viewportData.currentPage,
-    );
+    final pdfPanel = widget.activeMergedNote != null
+        ? MergedNoteEditorPanel(
+            key: ValueKey('note-${widget.activeMergedNote!.id}'),
+            note: widget.activeMergedNote!,
+            onSave: widget.onSaveMergedNote,
+            onRename: (newTitle) => widget.onRenameMergedNote(widget.activeMergedNote!.id, newTitle),
+          )
+        : PdfViewerPanel(
+            key: ValueKey('pdf-${widget.activeDocument!.id}'),
+            document: widget.activeDocument!,
+            onViewportChanged: widget.onViewportChanged,
+            initialPage: widget.viewportData.currentPage,
+          );
 
     final aiDocked = _aiVisible && _aiMode == _PanelMode.docked;
     final notesDocked = _notesVisible && _notesMode == _PanelMode.docked;
@@ -917,101 +958,156 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
     required bool aiDocked,
     required bool notesDocked,
   }) {
-    if (widget.notesOrientation == NotesDockOrientation.right && notesDocked) {
-      return _buildRightOrientedBody(
-        pdfPanel: pdfPanel,
-        aiPanel: aiPanel,
-        notesPanel: notesPanel,
-        aiDocked: aiDocked,
-      );
+    final leftPanels = <Widget>[];
+    final rightPanels = <Widget>[];
+    final bottomPanels = <Widget>[];
+
+    void addDockedPanel(Widget panel, PanelDockPosition position) {
+      switch (position) {
+        case PanelDockPosition.left:
+          leftPanels.add(panel);
+          break;
+        case PanelDockPosition.right:
+          rightPanels.add(panel);
+          break;
+        case PanelDockPosition.bottom:
+          bottomPanels.add(panel);
+          break;
+      }
     }
 
-    return _buildBottomOrientedBody(
+    if (aiDocked) {
+      addDockedPanel(aiPanel, widget.aiDockPosition);
+    }
+    if (notesDocked) {
+      addDockedPanel(notesPanel, widget.notesDockPosition);
+    }
+
+    return _buildDockedLayout(
       constraints: constraints,
       pdfPanel: pdfPanel,
-      aiPanel: aiPanel,
-      notesPanel: notesPanel,
-      aiDocked: aiDocked,
-      notesDocked: notesDocked,
+      leftPanels: leftPanels,
+      rightPanels: rightPanels,
+      bottomPanels: bottomPanels,
     );
   }
 
-  Widget _buildBottomOrientedBody({
+  Widget _buildDockedLayout({
     required BoxConstraints constraints,
     required Widget pdfPanel,
-    required Widget aiPanel,
-    required Widget notesPanel,
-    required bool aiDocked,
-    required bool notesDocked,
+    required List<Widget> leftPanels,
+    required List<Widget> rightPanels,
+    required List<Widget> bottomPanels,
   }) {
     const splitterSize = 6.0;
-    const minLeftWidth = 360.0;
-    const minRightWidth = 320.0;
+    const minSideWidth = 280.0;
+    const maxSideWidth = 540.0;
+    const minCenterWidth = 380.0;
     const minTopHeight = 220.0;
     const minBottomHeight = 220.0;
 
-    Widget topRow() {
-      if (!aiDocked) {
+    Widget topRow(BoxConstraints rowConstraints) {
+      final hasLeft = leftPanels.isNotEmpty;
+      final hasRight = rightPanels.isNotEmpty;
+      if (!hasLeft && !hasRight) {
         return pdfPanel;
       }
-      return LayoutBuilder(
-        builder: (context, topConstraints) {
-          final maxWidth = topConstraints.maxWidth;
-          final leftWidth = (maxWidth - splitterSize) * _leftPanelRatio;
-          return Row(
-            children: [
-              SizedBox(
-                width: leftWidth.clamp(minLeftWidth, maxWidth),
-                child: pdfPanel,
-              ),
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onPanUpdate: (details) {
-                  final deltaRatio = details.delta.dx / maxWidth;
-                  final candidate = _leftPanelRatio + deltaRatio;
-                  final minRatio = minLeftWidth / maxWidth;
-                  final maxRatio = 1 - (minRightWidth / maxWidth);
-                  setState(() {
-                    _leftPanelRatio = candidate.clamp(minRatio, maxRatio);
-                  });
-                },
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeColumn,
-                  child: const SizedBox(
-                    width: splitterSize,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
-                    ),
+
+      final maxWidth = rowConstraints.maxWidth;
+      var leftWidth = hasLeft
+          ? _leftDockWidth.clamp(minSideWidth, maxSideWidth).toDouble()
+          : 0.0;
+      var rightWidth = hasRight
+          ? _rightDockWidth.clamp(minSideWidth, maxSideWidth).toDouble()
+          : 0.0;
+      final splitterCount = (hasLeft ? 1 : 0) + (hasRight ? 1 : 0);
+      final maxSideTotal =
+          maxWidth - minCenterWidth - (splitterCount * splitterSize);
+      if (maxSideTotal < leftWidth + rightWidth) {
+        final scale = maxSideTotal <= 0
+            ? 0.0
+            : (maxSideTotal / (leftWidth + rightWidth));
+        leftWidth *= scale;
+        rightWidth *= scale;
+      }
+
+      return Row(
+        children: [
+          if (hasLeft) ...[
+            SizedBox(width: leftWidth, child: _buildDockStack(leftPanels)),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanUpdate: (details) {
+                setState(() {
+                  _leftDockWidth = (_leftDockWidth + details.delta.dx).clamp(
+                    minSideWidth,
+                    maxSideWidth,
+                  );
+                });
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: const SizedBox(
+                  width: splitterSize,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
                   ),
                 ),
               ),
-              Expanded(child: aiPanel),
-            ],
-          );
-        },
+            ),
+          ],
+          Expanded(child: pdfPanel),
+          if (hasRight) ...[
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanUpdate: (details) {
+                setState(() {
+                  _rightDockWidth = (_rightDockWidth - details.delta.dx).clamp(
+                    minSideWidth,
+                    maxSideWidth,
+                  );
+                });
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: const SizedBox(
+                  width: splitterSize,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(width: rightWidth, child: _buildDockStack(rightPanels)),
+          ],
+        ],
       );
     }
 
-    if (!notesDocked) {
-      return topRow();
+    if (bottomPanels.isEmpty) {
+      return LayoutBuilder(
+        builder: (context, rowConstraints) => topRow(rowConstraints),
+      );
     }
 
     final availableHeight = constraints.maxHeight;
     final topHeight = (availableHeight - splitterSize) * _topPanelRatio;
+    final minRatio = minTopHeight / availableHeight;
+    final maxRatio = 1 - (minBottomHeight / availableHeight);
 
     return Column(
       children: [
         SizedBox(
           height: topHeight.clamp(minTopHeight, availableHeight),
-          child: topRow(),
+          child: LayoutBuilder(
+            builder: (context, rowConstraints) => topRow(rowConstraints),
+          ),
         ),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanUpdate: (details) {
             final deltaRatio = details.delta.dy / availableHeight;
             final candidate = _topPanelRatio + deltaRatio;
-            final minRatio = minTopHeight / availableHeight;
-            final maxRatio = 1 - (minBottomHeight / availableHeight);
             setState(() {
               _topPanelRatio = candidate.clamp(minRatio, maxRatio);
             });
@@ -1027,74 +1123,27 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
             ),
           ),
         ),
-        Expanded(child: notesPanel),
+        Expanded(child: _buildDockStack(bottomPanels)),
       ],
     );
   }
 
-  Widget _buildRightOrientedBody({
-    required Widget pdfPanel,
-    required Widget aiPanel,
-    required Widget notesPanel,
-    required bool aiDocked,
-  }) {
-    const splitterSize = 6.0;
-    const minLeftWidth = 360.0;
-    const minRightWidth = 320.0;
+  Widget _buildDockStack(List<Widget> panels) {
+    if (panels.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (panels.length == 1) {
+      return panels.first;
+    }
 
-    return LayoutBuilder(
-      builder: (context, innerConstraints) {
-        final maxWidth = innerConstraints.maxWidth;
-        final leftWidth = (maxWidth - splitterSize) * _leftPanelRatio;
-
-        final rightChildren = <Widget>[];
-        if (aiDocked) {
-          rightChildren.add(Expanded(child: aiPanel));
-        }
-        rightChildren.add(Expanded(child: notesPanel));
-
-        return Row(
-          children: [
-            SizedBox(
-              width: leftWidth.clamp(minLeftWidth, maxWidth),
-              child: pdfPanel,
-            ),
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (details) {
-                final deltaRatio = details.delta.dx / maxWidth;
-                final candidate = _leftPanelRatio + deltaRatio;
-                final minRatio = minLeftWidth / maxWidth;
-                final maxRatio = 1 - (minRightWidth / maxWidth);
-                setState(() {
-                  _leftPanelRatio = candidate.clamp(minRatio, maxRatio);
-                });
-              },
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeColumn,
-                child: const SizedBox(
-                  width: splitterSize,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: Column(
-                children: rightChildren.length == 1
-                    ? [rightChildren.first]
-                    : [
-                        rightChildren.first,
-                        const SizedBox(height: 8),
-                        rightChildren.last,
-                      ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
+    final children = <Widget>[];
+    for (var i = 0; i < panels.length; i++) {
+      if (i > 0) {
+        children.add(const SizedBox(height: 8));
+      }
+      children.add(Expanded(child: panels[i]));
+    }
+    return Column(children: children);
   }
 
   Offset _clampOffset(Offset value, Size available, Size panelSize) {

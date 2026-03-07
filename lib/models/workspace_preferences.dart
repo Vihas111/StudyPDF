@@ -1,23 +1,27 @@
-enum NotesDockOrientation { bottom, right }
+enum PanelDockPosition { left, right, bottom }
 
 class WorkspacePreferences {
   const WorkspacePreferences({
-    this.notesOrientation = NotesDockOrientation.bottom,
+    this.aiDockPosition = PanelDockPosition.right,
+    this.notesDockPosition = PanelDockPosition.bottom,
     this.startWithAiVisible = true,
     this.startWithNotesVisible = true,
   });
 
-  final NotesDockOrientation notesOrientation;
+  final PanelDockPosition aiDockPosition;
+  final PanelDockPosition notesDockPosition;
   final bool startWithAiVisible;
   final bool startWithNotesVisible;
 
   WorkspacePreferences copyWith({
-    NotesDockOrientation? notesOrientation,
+    PanelDockPosition? aiDockPosition,
+    PanelDockPosition? notesDockPosition,
     bool? startWithAiVisible,
     bool? startWithNotesVisible,
   }) {
     return WorkspacePreferences(
-      notesOrientation: notesOrientation ?? this.notesOrientation,
+      aiDockPosition: aiDockPosition ?? this.aiDockPosition,
+      notesDockPosition: notesDockPosition ?? this.notesDockPosition,
       startWithAiVisible: startWithAiVisible ?? this.startWithAiVisible,
       startWithNotesVisible:
           startWithNotesVisible ?? this.startWithNotesVisible,
