@@ -236,7 +236,7 @@ Subfolders appear nested in the folder explorer.
 
 ---
 
-# Quality of Life Features
+# Quality of Life
 
 * Horizontal scrolling for tabs and recent files
 * Workspace shortcuts on the home screen

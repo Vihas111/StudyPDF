@@ -100,6 +100,7 @@ class _StudyShellPageState extends State<StudyShellPage> {
   String _defaultAiProviderId = 'openai';
   String _activeAiProviderId = 'openai';
   bool _webSearchEnabled = false;
+  bool _crossDocRagEnabled = false;
   String _googleSearchApiKey = '';
   String _googleSearchCx = '';
   String _pesuUsername = '';
@@ -245,6 +246,7 @@ class _StudyShellPageState extends State<StudyShellPage> {
     _defaultAiProviderId = rawDefault == 'anthropic' ? 'groq' : rawDefault;
     _activeAiProviderId = _defaultAiProviderId;
     _webSearchEnabled = prefs.getBool('ai.webSearchEnabled') ?? false;
+    _crossDocRagEnabled = prefs.getBool('ai.crossDocRagEnabled') ?? false;
     _googleSearchApiKey = prefs.getString('ai.googleSearchApiKey') ?? '';
     _googleSearchCx = prefs.getString('ai.googleSearchEngineId') ?? '';
     _pesuUsername = prefs.getString('pesu.username') ?? '';
@@ -454,6 +456,17 @@ class _StudyShellPageState extends State<StudyShellPage> {
       _webSearchEnabled = enabled;
       _googleSearchApiKey = apiKey.trim();
       _googleSearchCx = searchEngineId.trim();
+    });
+  }
+
+  Future<void> _updateCrossDocRagEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('ai.crossDocRagEnabled', enabled);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _crossDocRagEnabled = enabled;
     });
   }
 
@@ -1486,7 +1499,35 @@ class _StudyShellPageState extends State<StudyShellPage> {
       String citationHint = '';
       String webContextBlock = '';
       bool webUsed = false;
-      if (active != null) {
+      if (_crossDocRagEnabled && _openTabs.isNotEmpty) {
+        final pageAnchoredQuery = '$prompt\n\n$currentPageText';
+        final futures = _openTabs.map((tab) => _ragService.buildContext(
+              pdfPath: tab.path,
+              query: pageAnchoredQuery,
+              topK: 3, // slightly fewer per-doc since we're merging many
+            ));
+        final results = await Future.wait(futures);
+        
+        // Merge and re-rank all retrieved chunks globally
+        for (int i = 0; i < _openTabs.length; i++) {
+          final tab = _openTabs[i];
+          final res = results[i];
+          // We hackily extract the chunks and scores from the formatted string,
+          // or we can just append them all with Doc markers. The RAG service
+          // returns a block string. Let's just combine the result strings for now,
+          // prepending the document title.
+          if (res.context.trim().isNotEmpty) {
+            final docContext = res.context
+                .split('\n\n---\n\n')
+                .where((c) => c.trim().isNotEmpty)
+                .map((c) => '[Doc: ${tab.title}] $c')
+                .join('\n\n---\n\n');
+            ragContext = '$ragContext\n\n---\n\n$docContext';
+          }
+        }
+        citationHint =
+            '\nCurrent page is p$currentPage. You have cross-document RAG enabled. Citations include [Doc: title] [Page N]. Always prioritize current page unless user explicitly asks for other pages.';
+      } else if (active != null) {
         final pageAnchoredQuery = '$prompt\n\n$currentPageText';
         final rag = await _ragService.buildContext(
           pdfPath: active.path,
@@ -1943,6 +1984,8 @@ $citationHint
                                 _workspacePreferences.startWithAiVisible,
                             defaultNotesVisible:
                                 _workspacePreferences.startWithNotesVisible,
+                            bottomPanelSpansEntireWidth:
+                                _workspacePreferences.bottomPanelSpansEntireWidth,
                             activeAiProviderId: _activeAiProviderId,
                             onAiProviderChanged: _handleAiProviderChanged,
                             onCreateHomeShortcut: _createWorkspaceShortcut,
@@ -1982,6 +2025,8 @@ $citationHint
                             geminiApiKey: _geminiApiKey,
                             onApiKeyChanged: _updateApiKey,
                             webSearchEnabled: _webSearchEnabled,
+                            crossDocRagEnabled: _crossDocRagEnabled,
+                            onCrossDocRagChanged: _updateCrossDocRagEnabled,
                             googleSearchApiKey: _googleSearchApiKey,
                             googleSearchEngineId: _googleSearchCx,
                             onWebSearchSettingsChanged:

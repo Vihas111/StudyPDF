@@ -15,6 +15,8 @@ class WorkspaceSettingsPage extends StatefulWidget {
     required this.geminiApiKey,
     required this.onApiKeyChanged,
     required this.webSearchEnabled,
+    required this.crossDocRagEnabled,
+    required this.onCrossDocRagChanged,
     required this.googleSearchApiKey,
     required this.googleSearchEngineId,
     required this.onWebSearchSettingsChanged,
@@ -37,6 +39,8 @@ class WorkspaceSettingsPage extends StatefulWidget {
   final Future<void> Function({required String providerId, required String key})
   onApiKeyChanged;
   final bool webSearchEnabled;
+  final bool crossDocRagEnabled;
+  final ValueChanged<bool> onCrossDocRagChanged;
   final String googleSearchApiKey;
   final String googleSearchEngineId;
   final Future<void> Function({
@@ -165,7 +169,20 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     }
 
     place(ai, widget.preferences.aiDockPosition);
-    place(notes, widget.preferences.notesDockPosition);
+
+    // Mirror the mutual-exclusion rule from the workspace layout:
+    // if Notes is configured to the same side as AI, show it on the opposite side.
+    PanelDockPosition effectiveNotesPos = widget.preferences.notesDockPosition;
+    if (effectiveNotesPos == widget.preferences.aiDockPosition) {
+      if (effectiveNotesPos == PanelDockPosition.left) {
+        effectiveNotesPos = PanelDockPosition.right;
+      } else if (effectiveNotesPos == PanelDockPosition.right) {
+        effectiveNotesPos = PanelDockPosition.left;
+      } else {
+        effectiveNotesPos = PanelDockPosition.right;
+      }
+    }
+    place(notes, effectiveNotesPos);
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -509,6 +526,16 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                           ),
                         ),
                         const SizedBox(height: 12),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Query all open tabs (Cross-Document RAG)'),
+                          subtitle: const Text(
+                            'When enabled, the AI will search across all open PDFs instead of just the active one.(Good for comparing across documents but more token expensive)',
+                          ),
+                          value: widget.crossDocRagEnabled,
+                          onChanged: widget.onCrossDocRagChanged,
+                        ),
+                        const SizedBox(height: 12),
                         Row(
                           children: [
                             Expanded(
@@ -628,11 +655,21 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                             if (value == null) {
                               return;
                             }
-                            widget.onChanged(
-                              widget.preferences.copyWith(
-                                aiDockPosition: value,
-                              ),
+                            // If the new AI position conflicts with Notes, flip Notes too.
+                            var newPrefs = widget.preferences.copyWith(
+                              aiDockPosition: value,
                             );
+                            if (newPrefs.notesDockPosition == value) {
+                              final flipped = value == PanelDockPosition.left
+                                  ? PanelDockPosition.right
+                                  : value == PanelDockPosition.right
+                                      ? PanelDockPosition.left
+                                      : PanelDockPosition.right;
+                              newPrefs = newPrefs.copyWith(
+                                notesDockPosition: flipped,
+                              );
+                            }
+                            widget.onChanged(newPrefs);
                           },
                         ),
                         const SizedBox(height: 12),
@@ -654,9 +691,18 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                             if (value == null) {
                               return;
                             }
+                            // Enforce mutual exclusion: if chosen position matches AI, flip to opposite.
+                            PanelDockPosition effective = value;
+                            if (effective == widget.preferences.aiDockPosition) {
+                              effective = effective == PanelDockPosition.left
+                                  ? PanelDockPosition.right
+                                  : effective == PanelDockPosition.right
+                                      ? PanelDockPosition.left
+                                      : PanelDockPosition.right;
+                            }
                             widget.onChanged(
                               widget.preferences.copyWith(
-                                notesDockPosition: value,
+                                notesDockPosition: effective,
                               ),
                             );
                           },
@@ -684,6 +730,19 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                             widget.onChanged(
                               widget.preferences.copyWith(
                                 startWithNotesVisible: value,
+                              ),
+                            );
+                          },
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Bottom panel spans full width'),
+                          subtitle: const Text('When disabled, side panels span top-to-bottom constraints'),
+                          value: widget.preferences.bottomPanelSpansEntireWidth,
+                          onChanged: (value) {
+                            widget.onChanged(
+                              widget.preferences.copyWith(
+                                bottomPanelSpansEntireWidth: value,
                               ),
                             );
                           },

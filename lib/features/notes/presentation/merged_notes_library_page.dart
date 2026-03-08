@@ -5,6 +5,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:studypdf/core/storage/merged_notes_store.dart';
 import 'package:studypdf/models/merged_note.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 class MergedNotesLibraryPage extends StatefulWidget {
   const MergedNotesLibraryPage({
@@ -22,6 +23,7 @@ class MergedNotesLibraryPage extends StatefulWidget {
 
 class _MergedNotesLibraryPageState extends State<MergedNotesLibraryPage> {
   List<MergedNote> _notes = [];
+  bool _isGridView = true;
 
   @override
   void initState() {
@@ -216,14 +218,63 @@ class _MergedNotesLibraryPageState extends State<MergedNotesLibraryPage> {
       return const Center(child: Text('No merged notes found. Open a PDF and select "Merge Notes" from the tab menu.'));
     }
 
-    return ListView.builder(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              Text(
+                'Merged Notes',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const Spacer(),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment<bool>(
+                    value: true,
+                    icon: Icon(Icons.grid_view),
+                    label: Text('Grid'),
+                  ),
+                  ButtonSegment<bool>(
+                    value: false,
+                    icon: Icon(Icons.view_list),
+                    label: Text('List'),
+                  ),
+                ],
+                selected: {_isGridView},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _isGridView = selection.first;
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _isGridView ? _buildGridView() : _buildListView(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGridView() {
+    return GridView.builder(
       padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 350,
+        mainAxisSpacing: 16,
+        crossAxisSpacing: 16,
+        childAspectRatio: 0.85,
+      ),
       itemCount: _notes.length,
       itemBuilder: (context, index) {
         final note = _notes[index];
         final formatter = DateFormat.yMMMd().add_jm();
         return Card(
-          margin: const EdgeInsets.only(bottom: 8),
           elevation: 2,
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -246,14 +297,15 @@ class _MergedNotesLibraryPageState extends State<MergedNotesLibraryPage> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.more_vert),
-                        onPressed: () {
-                          final RenderBox box = context.findRenderObject() as RenderBox;
-                          final offset = box.localToGlobal(Offset.zero);
-                          // approximate position, the secondary tap is better but this helps touch users
-                          _showNoteMenu(note, offset + const Offset(300, 20)); 
-                        },
+                      Builder(
+                        builder: (buttonContext) => IconButton(
+                          icon: const Icon(Icons.more_vert),
+                          onPressed: () {
+                            final RenderBox box = buttonContext.findRenderObject() as RenderBox;
+                            final offset = box.localToGlobal(Offset.zero);
+                            _showNoteMenu(note, offset + Offset(box.size.width / 2, box.size.height / 2)); 
+                          },
+                        ),
                       ),
                     ],
                   ),
@@ -262,16 +314,56 @@ class _MergedNotesLibraryPageState extends State<MergedNotesLibraryPage> {
                     'Updated: ${formatter.format(note.updatedAt)}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    note.markdownContent,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium,
+                  const Divider(height: 24),
+                  Expanded(
+                    child: ClipRect(
+                      child: SingleChildScrollView(
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: MarkdownBody(
+                          data: note.markdownContent,
+                          styleSheet: MarkdownStyleSheet(
+                            p: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildListView() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: _notes.length,
+      itemBuilder: (context, index) {
+        final note = _notes[index];
+        final formatter = DateFormat.yMMMd().add_jm();
+        return GestureDetector(
+          onSecondaryTapDown: (details) => _showNoteMenu(note, details.globalPosition),
+          child: ListTile(
+            leading: const Icon(Icons.sticky_note_2, color: Colors.blueAccent),
+            title: Text(
+              note.pdfTitle,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text('Updated: ${formatter.format(note.updatedAt)}'),
+            trailing: Builder(
+              builder: (buttonContext) => IconButton(
+                icon: const Icon(Icons.more_vert),
+                onPressed: () {
+                  final RenderBox box = buttonContext.findRenderObject() as RenderBox;
+                  final offset = box.localToGlobal(Offset.zero);
+                  _showNoteMenu(note, offset + Offset(box.size.width / 2, box.size.height / 2)); 
+                },
+              ),
+            ),
+            onTap: () => widget.onOpenNote(note),
           ),
         );
       },

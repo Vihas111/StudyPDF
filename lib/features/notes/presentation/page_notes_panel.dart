@@ -1,6 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:studypdf/models/annotation.dart';
+import 'package:studypdf/features/notes/presentation/markdown_extensions.dart';
+import 'package:studypdf/features/notes/presentation/markdown_text_editing_controller.dart';
+import 'package:studypdf/features/notes/presentation/markdown_toolbar.dart';
 
 class PageNotesPanel extends StatefulWidget {
   const PageNotesPanel({
@@ -19,7 +25,7 @@ class PageNotesPanel extends StatefulWidget {
 }
 
 class _PageNotesPanelState extends State<PageNotesPanel> {
-  final TextEditingController _controller = TextEditingController();
+  final MarkdownTextEditingController _controller = MarkdownTextEditingController();
   final FocusNode _editorFocusNode = FocusNode();
   bool _dirty = false;
 
@@ -74,40 +80,6 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
     _dirty = false;
   }
 
-  void _insertWrap(String left, String right) {
-    final value = _controller.value;
-    final selection = value.selection;
-    if (!selection.isValid) {
-      return;
-    }
-    final text = value.text;
-    final start = selection.start;
-    final end = selection.end;
-    final selected = text.substring(start, end);
-    final next = text.replaceRange(start, end, '$left$selected$right');
-    final cursor = start + left.length + selected.length + right.length;
-    _controller.value = TextEditingValue(
-      text: next,
-      selection: TextSelection.collapsed(offset: cursor),
-    );
-    _editorFocusNode.requestFocus();
-  }
-
-  void _insertAtCursor(String snippet) {
-    final value = _controller.value;
-    final selection = value.selection;
-    final text = value.text;
-    final start = selection.isValid ? selection.start : text.length;
-    final end = selection.isValid ? selection.end : text.length;
-    final next = text.replaceRange(start, end, snippet);
-    final cursor = start + snippet.length;
-    _controller.value = TextEditingValue(
-      text: next,
-      selection: TextSelection.collapsed(offset: cursor),
-    );
-    _editorFocusNode.requestFocus();
-  }
-
   Future<void> _showNoteContextMenu(
     BuildContext context,
     TapDownDetails details,
@@ -136,6 +108,7 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
       );
       _dirty = true;
       _editorFocusNode.requestFocus();
+      setState(() {});
       return;
     }
     if (result == 'copy') {
@@ -153,135 +126,142 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
   Widget build(BuildContext context) {
     return Card(
       margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(
-                  'Page ${widget.pageNumber} Notes',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final hasFiniteHeight = constraints.maxHeight.isFinite;
 
-                const Spacer(),
+          // ── Header row ──────────────────────────────────────────────────
+          final header = Row(
+            children: [
+              Text(
+                'Page ${widget.pageNumber} Notes',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ],
+          );
 
-                Flexible(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
+          // ── Toolbar ───────────────────────────────────────────────────────
+          final toolbar = Column(children: [
+            const SizedBox(height: 8),
+            MarkdownToolbar(controller: _controller, focusNode: _editorFocusNode),
+          ]);
+
+          // ── Editor area ───────────────────────────────────────────────────
+          final editorArea = TextField(
+            controller: _controller,
+            focusNode: _editorFocusNode,
+            expands: hasFiniteHeight,
+            minLines: hasFiniteHeight ? null : 12,
+            maxLines: null,
+            textAlignVertical: TextAlignVertical.top,
+            decoration: const InputDecoration(
+              hintText:
+                  'Write markdown notes here. Example:\n## Key ideas\n- point 1\n```python\nprint("hello")\n```',
+              border: OutlineInputBorder(),
+            ),
+          );
+
+          // ── Save button ───────────────────────────────────────────────────
+          final saveButton = Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: () {
+                final value = _controller.text.trim();
+                if (value.isEmpty) return;
+                widget.onSave(value);
+                _dirty = false;
+                setState(() {});
+              },
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Save note'),
+            ),
+          );
+
+          // ── Saved note preview ───────────────────────────────────────────
+          final savedNoteSection = _latestSavedNote == null
+              ? const Text('No saved note for this page yet.')
+              : GestureDetector(
+                  onSecondaryTapDown: (details) =>
+                      _showNoteContextMenu(context, details, _latestSavedNote!),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Theme.of(context).dividerColor),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        _ToolbarChip(label: 'Bold', onTap: () => _insertWrap('**', '**')),
-                        const SizedBox(width: 6),
-                        _ToolbarChip(
-                          label: 'Code',
-                          onTap: () => _insertAtCursor('\n```text\ncode here\n```\n'),
+                        Text('Saved note', style: Theme.of(context).textTheme.labelMedium),
+                        const SizedBox(height: 6),
+                        MarkdownBody(
+                          data: _latestSavedNote!.content,
+                          selectable: true,
+                          extensionSet: md.ExtensionSet.gitHubWeb,
+                          inlineSyntaxes: [UnderlineSyntax()],
+                          builders: {'u': UnderlineBuilder()},
+                          imageBuilder: (uri, title, alt) => Image.file(File(uri.path)),
                         ),
-                        const SizedBox(width: 6),
-                        _ToolbarChip(
-                          label: 'Image',
-                          onTap: () => _insertAtCursor('\n![alt text](https://)\n'),
-                        ),
-                        const SizedBox(width: 6),
-                        _ToolbarChip(
-                          label: 'Link',
-                          onTap: () => _insertAtCursor('[title](https://)'),
-                        ),
-                        const SizedBox(width: 6),
-                        _ToolbarChip(
-                          label: 'Bullet',
-                          onTap: () => _insertAtCursor('\n- '),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Updated ${_latestSavedNote!.createdAt.toLocal().toIso8601String()}',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: TextField(
-                controller: _controller,
-                focusNode: _editorFocusNode,
-                expands: true,
-                minLines: null,
-                maxLines: null,
-                textAlignVertical: TextAlignVertical.top,
-                decoration: const InputDecoration(
-                  hintText:
-                      'Write markdown notes here. Example:\n## Key ideas\n- point 1\n```python\nprint("hello")\n```',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: () {
-                  final value = _controller.text.trim();
-                  if (value.isEmpty) {
-                    return;
-                  }
-                  widget.onSave(value);
-                  _dirty = false;
-                },
-                icon: const Icon(Icons.save_outlined),
-                label: const Text('Save note'),
-              ),
-            ),
-            const Divider(height: 22),
-            if (_latestSavedNote == null)
-              const Text('No saved note for this page yet.')
-            else
-              GestureDetector(
-                onSecondaryTapDown: (details) =>
-                    _showNoteContextMenu(context, details, _latestSavedNote!),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Theme.of(context).dividerColor),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Saved note',
-                        style: Theme.of(context).textTheme.labelMedium,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _latestSavedNote!.content,
-                        maxLines: 4,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Updated ${_latestSavedNote!.createdAt.toLocal().toIso8601String()}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
+                );
+
+          // ── Layout ────────────────────────────────────────────────────────
+          if (hasFiniteHeight) {
+            return Padding(
+              padding: const EdgeInsets.all(12),
+              child: SizedBox(
+                width: constraints.maxWidth - 24,
+                height: constraints.maxHeight - 24,
+                child: Column(
+                  mainAxisSize: MainAxisSize.max,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    header,
+                    toolbar,
+                    const SizedBox(height: 10),
+                    Expanded(child: editorArea),
+                    const SizedBox(height: 10),
+                    saveButton,
+                    const Divider(height: 22),
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: SingleChildScrollView(child: savedNoteSection),
+                    ),
+                  ],
                 ),
               ),
-          ],
-        ),
+            );
+          } else {
+            return SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    header,
+                    toolbar,
+                    const SizedBox(height: 10),
+                    editorArea,
+                    const SizedBox(height: 10),
+                    saveButton,
+                    const Divider(height: 22),
+                    savedNoteSection,
+                  ],
+                ),
+              ),
+            );
+          }
+        },
       ),
     );
-  }
-}
-
-class _ToolbarChip extends StatelessWidget {
-  const _ToolbarChip({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(label: Text(label), onPressed: onTap);
   }
 }

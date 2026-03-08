@@ -167,6 +167,25 @@ class _PdfViewerPanelState extends State<PdfViewerPanel> {
                   ),
                 ),
                 IconButton(
+                  tooltip: 'Zoom out',
+                  onPressed: () {
+                    if (_controller.zoomLevel > 0.5) {
+                      _controller.zoomLevel =
+                          (_controller.zoomLevel - 0.25).clamp(0.5, 4.0);
+                    }
+                  },
+                  icon: const Icon(Icons.zoom_out),
+                ),
+                IconButton(
+                  tooltip: 'Zoom in',
+                  onPressed: () {
+                    if (_controller.zoomLevel < 3) {
+                      _controller.zoomLevel += 0.25;
+                    }
+                  },
+                  icon: const Icon(Icons.zoom_in),
+                ),
+                IconButton(
                   tooltip: 'Previous page',
                   onPressed: _currentPage > 1
                       ? () {

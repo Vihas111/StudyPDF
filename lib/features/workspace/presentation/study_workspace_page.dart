@@ -45,6 +45,7 @@ class StudyWorkspacePage extends StatefulWidget {
     required this.notesDockPosition,
     required this.defaultAiVisible,
     required this.defaultNotesVisible,
+    required this.bottomPanelSpansEntireWidth,
     required this.activeAiProviderId,
     required this.onAiProviderChanged,
     required this.onCreateHomeShortcut,
@@ -83,6 +84,7 @@ class StudyWorkspacePage extends StatefulWidget {
   final PanelDockPosition notesDockPosition;
   final bool defaultAiVisible;
   final bool defaultNotesVisible;
+  final bool bottomPanelSpansEntireWidth;
   final String activeAiProviderId;
   final ValueChanged<String> onAiProviderChanged;
   final Future<bool> Function({
@@ -883,7 +885,7 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
 
                 return Stack(
                   children: [
-                    body,
+                    SizedBox.expand(child: body),
                     if (_aiVisible && _aiMode == _PanelMode.inAppPopup)
                       FloatingPanelWindow(
                         title: 'AI Assistant',
@@ -980,7 +982,21 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
       addDockedPanel(aiPanel, widget.aiDockPosition);
     }
     if (notesDocked) {
-      addDockedPanel(notesPanel, widget.notesDockPosition);
+      // Enforce mutual exclusion: AI and Notes cannot occupy the same docked side.
+      // If they would both end up on the same side, move notes to the opposite.
+      PanelDockPosition notesPosition = widget.notesDockPosition;
+      if (aiDocked && notesPosition == widget.aiDockPosition) {
+        // Flip left↔right. If both somehow set to bottom, push notes to right.
+        if (notesPosition == PanelDockPosition.left) {
+          notesPosition = PanelDockPosition.right;
+        } else if (notesPosition == PanelDockPosition.right) {
+          notesPosition = PanelDockPosition.left;
+        } else {
+          // both bottom — push notes to right
+          notesPosition = PanelDockPosition.right;
+        }
+      }
+      addDockedPanel(notesPanel, notesPosition);
     }
 
     return _buildDockedLayout(
@@ -1000,151 +1016,195 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
     required List<Widget> bottomPanels,
   }) {
     const splitterSize = 6.0;
-    const minSideWidth = 280.0;
-    const maxSideWidth = 540.0;
-    const minCenterWidth = 380.0;
-    const minTopHeight = 220.0;
-    const minBottomHeight = 220.0;
+    const minSideWidth = 100.0;
+    const maxSideWidth = double.infinity;
+    const minCenterWidth = 200.0;
+    const minTopHeight = 100.0;
+    const minBottomHeight = 100.0;
 
-    Widget topRow(BoxConstraints rowConstraints) {
-      final hasLeft = leftPanels.isNotEmpty;
-      final hasRight = rightPanels.isNotEmpty;
-      if (!hasLeft && !hasRight) {
-        return pdfPanel;
+    final hasLeft = leftPanels.isNotEmpty;
+    final hasRight = rightPanels.isNotEmpty;
+
+    // Common logic for rendering side panels
+    List<Widget> buildLeft(double leftWidth) {
+      return [
+        if (hasLeft) ...[
+          SizedBox(width: leftWidth, child: _buildDockStack(leftPanels)),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanUpdate: (details) {
+              setState(() {
+                _leftDockWidth = (_leftDockWidth + details.delta.dx).clamp(
+                  minSideWidth,
+                  maxSideWidth,
+                );
+              });
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeColumn,
+              child: const SizedBox(
+                width: splitterSize,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ];
+    }
+
+    List<Widget> buildRight(double rightWidth) {
+      return [
+        if (hasRight) ...[
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanUpdate: (details) {
+              setState(() {
+                _rightDockWidth = (_rightDockWidth - details.delta.dx).clamp(
+                  minSideWidth,
+                  maxSideWidth,
+                );
+              });
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeColumn,
+              child: const SizedBox(
+                width: splitterSize,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(width: rightWidth, child: _buildDockStack(rightPanels)),
+        ],
+      ];
+    }
+
+    Widget buildCenterSplit(Widget topWidget, double availableHeight) {
+      if (bottomPanels.isEmpty) {
+        return topWidget;
       }
+      final topHeight = (availableHeight - splitterSize) * _topPanelRatio;
+      final minRatio = minTopHeight / availableHeight;
+      final maxRatio = 1 - (minBottomHeight / availableHeight);
 
-      final maxWidth = rowConstraints.maxWidth;
-      var leftWidth = hasLeft
-          ? _leftDockWidth.clamp(minSideWidth, maxSideWidth).toDouble()
-          : 0.0;
-      var rightWidth = hasRight
-          ? _rightDockWidth.clamp(minSideWidth, maxSideWidth).toDouble()
-          : 0.0;
-      final splitterCount = (hasLeft ? 1 : 0) + (hasRight ? 1 : 0);
-      final maxSideTotal =
-          maxWidth - minCenterWidth - (splitterCount * splitterSize);
-      if (maxSideTotal < leftWidth + rightWidth) {
-        final scale = maxSideTotal <= 0
-            ? 0.0
-            : (maxSideTotal / (leftWidth + rightWidth));
-        leftWidth *= scale;
-        rightWidth *= scale;
-      }
-
-      return Row(
+      return Column(
         children: [
-          if (hasLeft) ...[
-            SizedBox(width: leftWidth, child: _buildDockStack(leftPanels)),
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (details) {
-                setState(() {
-                  _leftDockWidth = (_leftDockWidth + details.delta.dx).clamp(
-                    minSideWidth,
-                    maxSideWidth,
-                  );
-                });
-              },
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeColumn,
-                child: const SizedBox(
-                  width: splitterSize,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
-                  ),
+          SizedBox(
+            height: topHeight.clamp(minTopHeight, availableHeight),
+            child: topWidget,
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanUpdate: (details) {
+              final deltaRatio = details.delta.dy / availableHeight;
+              final candidate = _topPanelRatio + deltaRatio;
+              setState(() {
+                _topPanelRatio = candidate.clamp(minRatio, maxRatio);
+              });
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeRow,
+              child: const SizedBox(
+                height: splitterSize,
+                width: double.infinity,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
                 ),
               ),
             ),
-          ],
-          Expanded(child: pdfPanel),
-          if (hasRight) ...[
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (details) {
-                setState(() {
-                  _rightDockWidth = (_rightDockWidth - details.delta.dx).clamp(
-                    minSideWidth,
-                    maxSideWidth,
-                  );
-                });
-              },
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeColumn,
-                child: const SizedBox(
-                  width: splitterSize,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(width: rightWidth, child: _buildDockStack(rightPanels)),
-          ],
+          ),
+          Expanded(child: _buildDockStack(bottomPanels)),
         ],
       );
     }
 
-    if (bottomPanels.isEmpty) {
-      return LayoutBuilder(
-        builder: (context, rowConstraints) => topRow(rowConstraints),
-      );
-    }
+    return LayoutBuilder(
+      builder: (context, rowConstraints) {
+        final maxWidth = rowConstraints.maxWidth;
+        var leftWidth = hasLeft ? _leftDockWidth.clamp(minSideWidth, maxSideWidth).toDouble() : 0.0;
+        var rightWidth = hasRight ? _rightDockWidth.clamp(minSideWidth, maxSideWidth).toDouble() : 0.0;
+        final splitterCount = (hasLeft ? 1 : 0) + (hasRight ? 1 : 0);
+        final maxSideTotal = maxWidth - minCenterWidth - (splitterCount * splitterSize);
+        if (maxSideTotal < leftWidth + rightWidth) {
+          final scale = maxSideTotal <= 0 ? 0.0 : (maxSideTotal / (leftWidth + rightWidth));
+          leftWidth *= scale;
+          rightWidth *= scale;
+        }
 
-    final availableHeight = constraints.maxHeight;
-    final topHeight = (availableHeight - splitterSize) * _topPanelRatio;
-    final minRatio = minTopHeight / availableHeight;
-    final maxRatio = 1 - (minBottomHeight / availableHeight);
-
-    return Column(
-      children: [
-        SizedBox(
-          height: topHeight.clamp(minTopHeight, availableHeight),
-          child: LayoutBuilder(
-            builder: (context, rowConstraints) => topRow(rowConstraints),
-          ),
-        ),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onPanUpdate: (details) {
-            final deltaRatio = details.delta.dy / availableHeight;
-            final candidate = _topPanelRatio + deltaRatio;
-            setState(() {
-              _topPanelRatio = candidate.clamp(minRatio, maxRatio);
-            });
-          },
-          child: MouseRegion(
-            cursor: SystemMouseCursors.resizeRow,
-            child: const SizedBox(
-              height: splitterSize,
-              width: double.infinity,
-              child: DecoratedBox(
-                decoration: BoxDecoration(color: Color(0xFFD9DDE4)),
-              ),
-            ),
-          ),
-        ),
-        Expanded(child: _buildDockStack(bottomPanels)),
-      ],
+        if (widget.bottomPanelSpansEntireWidth) {
+          // Bottom spans entirety: Top Row (Left, PDF, Right) -> Bottom Row
+          Widget topRow = Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ...buildLeft(leftWidth),
+              Expanded(child: pdfPanel),
+              ...buildRight(rightWidth),
+            ],
+          );
+          return buildCenterSplit(topRow, constraints.maxHeight);
+        } else {
+          // Side panels span entirety: Row(Left, CenterCol(PDF, Bottom), Right)
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ...buildLeft(leftWidth),
+              Expanded(child: buildCenterSplit(pdfPanel, constraints.maxHeight)),
+              ...buildRight(rightWidth),
+            ],
+          );
+        }
+      },
     );
   }
+
+  static const double _minPanelHeight = 300.0;
 
   Widget _buildDockStack(List<Widget> panels) {
     if (panels.isEmpty) {
       return const SizedBox.shrink();
     }
-    if (panels.length == 1) {
-      return panels.first;
-    }
 
-    final children = <Widget>[];
-    for (var i = 0; i < panels.length; i++) {
-      if (i > 0) {
-        children.add(const SizedBox(height: 8));
-      }
-      children.add(Expanded(child: panels[i]));
-    }
-    return Column(children: children);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Total minimum height needed (accounting for gaps between panels)
+        final gaps = (panels.length - 1) * 8.0;
+        final minTotal = _minPanelHeight * panels.length + gaps;
+        final availableHeight = constraints.maxHeight;
+        final needsScroll = availableHeight.isFinite && availableHeight < minTotal;
+
+        if (needsScroll) {
+          // Below minimum: each panel gets a fixed minPanelHeight and the
+          // whole column scrolls so nothing gets squashed.
+          final children = <Widget>[];
+          for (var i = 0; i < panels.length; i++) {
+            if (i > 0) children.add(const SizedBox(height: 8));
+            children.add(SizedBox(height: _minPanelHeight, child: panels[i]));
+          }
+          return SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          );
+        }
+
+        // Enough height: distribute space evenly with Expanded
+        final expandedChildren = <Widget>[];
+        for (var i = 0; i < panels.length; i++) {
+          if (i > 0) expandedChildren.add(const SizedBox(height: 8));
+          expandedChildren.add(Expanded(child: panels[i]));
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: expandedChildren,
+        );
+      },
+    );
   }
+
 
   Offset _clampOffset(Offset value, Size available, Size panelSize) {
     final maxX = math.max(0, available.width - panelSize.width);
