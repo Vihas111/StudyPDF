@@ -252,7 +252,7 @@ Download the latest installer from the **Releases page**.
 Run:
 
 ```
-StudyPDF-Setup.exe
+StudyPDF-v1.2.0-windows-Setup.exe
 ```
 
 Follow the installation wizard.
