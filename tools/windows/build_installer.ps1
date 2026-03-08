@@ -7,15 +7,19 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 Set-Location $root
 
-$releaseDir = Join-Path $root "build\windows\x64\runner\Release"
-$stageDir = Join-Path $root "build\installer\stage"
-$distDir = Join-Path $root "build\installer\dist"
-$downloaderDir = Join-Path $root "pesu_course_downloader"
+$releaseDir        = Join-Path $root "build\windows\x64\runner\Release"
+$stageDir          = Join-Path $root "build\installer\stage"
+$distDir           = Join-Path $root "build\installer\dist"
+$downloaderDir     = Join-Path $root "pesu_course_downloader"
 $stageDownloaderDir = Join-Path $stageDir "pesu_course_downloader"
-$issFile = Join-Path $root "installer\studypdf.iss"
 
+# ── Clean ISS Scripts ───────────────────────────────────────────────
+$issInstaller = Join-Path $root "installer\studypdf_installer.iss"
+$issUpdater   = Join-Path $root "installer\studypdf_updater.iss"
+
+# ────────────────────────────────────────────────────────────────────
 if (-not $SkipBuild) {
-  Write-Host "Building Windows release..."
+  Write-Host "Building Windows release for v1.2.0..."
   flutter build windows --release
 }
 
@@ -59,6 +63,7 @@ foreach ($item in $downloaderWhitelist) {
 # Ensure runtime-generated folders exist but ship empty.
 New-Item -ItemType Directory -Path (Join-Path $stageDownloaderDir "downloads") -Force | Out-Null
 
+# ── Locate Inno Setup compiler ───────────────────────────────────────
 $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
 $isccPath = $null
 if ($iscc) {
@@ -74,15 +79,27 @@ if (-not $isccPath) {
 if (-not $isccPath) {
   Write-Host ""
   Write-Host "Stage is ready, but Inno Setup compiler was not found."
-  Write-Host "Install Inno Setup 6, then run:"
-  Write-Host "  `"$issFile`" with ISCC.exe"
+  Write-Host "Install Inno Setup 6, then compile manually:"
+  Write-Host "  iscc `"$issInstaller`""
+  Write-Host "  iscc `"$issUpdater`""
   Write-Host ""
   Write-Host "Staged files: $stageDir"
   exit 0
 }
 
-Write-Host "Building installer with Inno Setup..."
-& $isccPath $issFile
+# ── Compile Full Installer ──────────────────────────────────────────
+Write-Host ""
+Write-Host "Compiling full installer..."
+& $isccPath $issInstaller
+if ($LASTEXITCODE -ne 0) { throw "Full installer compile failed (exit $LASTEXITCODE)" }
+
+# ── Compile Updater ─────────────────────────────────────────────────
+Write-Host ""
+Write-Host "Compiling updater..."
+& $isccPath $issUpdater
+if ($LASTEXITCODE -ne 0) { throw "Updater compile failed (exit $LASTEXITCODE)" }
 
 Write-Host ""
-Write-Host "Installer created in: $distDir"
+Write-Host "Done! Both installers are in: $distDir"
+Write-Host "  StudyPDF-Setup-v1.2.0.exe  (full install)"
+Write-Host "  StudyPDF-Updater-v1.2.0.exe (patch for existing installs to arrive at 1.2.0)"
