@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:studypdf/core/ai/ai_provider.dart';
+import 'package:studypdf/core/theme/design_tokens.dart';
 import 'package:studypdf/features/notes/presentation/markdown_extensions.dart';
+import 'package:studypdf/widgets/hover_surface.dart';
 
 class AIAssistantPanel extends StatefulWidget {
   const AIAssistantPanel({
@@ -128,6 +130,16 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
     }
   }
 
+  Future<void> _copyMessage(BuildContext context, String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) {
@@ -145,6 +157,10 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
   Widget build(BuildContext context) {
     return Card(
       margin: EdgeInsets.zero,
+      elevation: AppElevation.low,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.md),
+      ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           // Build the top section (header, provider dropdown, action buttons)
@@ -154,9 +170,11 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
             children: [
               Text(
                 'AI Assistant',
-                style: Theme.of(context).textTheme.titleMedium,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               DropdownButtonFormField<String>(
                 initialValue: _providerId,
                 items: widget.providers
@@ -180,10 +198,10 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
                   border: OutlineInputBorder(),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               Wrap(
-                spacing: 8,
-                runSpacing: 8,
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.sm,
                 children: [
                   FilledButton(
                     onPressed: _running
@@ -222,12 +240,12 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
                 ],
               ),
               if (_running) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 const LinearProgressIndicator(minHeight: 2),
               ],
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               const Divider(height: 1),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
             ],
           );
 
@@ -269,15 +287,15 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
 
           // Chat list fills all remaining vertical space
           final chatList = Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(AppSpacing.sm),
             decoration: BoxDecoration(
               border: Border.all(color: Theme.of(context).dividerColor),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadii.md),
             ),
             child: ListView.separated(
               controller: _scrollController,
               itemCount: _messages.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 final isUser = msg.role == _ChatRole.user;
@@ -287,39 +305,85 @@ class _AIAssistantPanelState extends State<AIAssistantPanel> {
                 final color = isUser
                     ? Theme.of(context).colorScheme.primaryContainer
                     : Theme.of(context).colorScheme.surfaceContainerHighest;
+                final onColor = isUser
+                    ? Theme.of(context).colorScheme.onPrimaryContainer
+                    : Theme.of(context).colorScheme.onSurface;
                 return Align(
                   alignment: align,
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 520),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: color,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: MarkdownBody(
-                          data: msg.text,
-                          selectable: true,
-                          extensionSet: md.ExtensionSet.gitHubWeb,
-                          inlineSyntaxes: [UnderlineSyntax()],
-                          builders: {'u': UnderlineBuilder()},
-                          imageBuilder: (uri, title, alt) {
-                            if (uri.scheme == 'file') {
-                              return Image.file(File(uri.path));
-                            }
-                            return const SizedBox.shrink();
-                          },
-                          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                            p: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: isUser ? Theme.of(context).colorScheme.onPrimaryContainer : null,
-                            ),
-                            strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: isUser ? Theme.of(context).colorScheme.onPrimaryContainer : null,
-                              fontWeight: FontWeight.w700,
+                    child: HoverSurface(
+                      color: color,
+                      hoverColor: color,
+                      borderRadius: BorderRadius.circular(AppRadii.lg),
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      cursor: SystemMouseCursors.text,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          MarkdownBody(
+                            data: msg.text,
+                            selectable: true,
+                            extensionSet: md.ExtensionSet.gitHubWeb,
+                            inlineSyntaxes: [UnderlineSyntax()],
+                            builders: {'u': UnderlineBuilder()},
+                            imageBuilder: (uri, title, alt) {
+                              if (uri.scheme == 'file') {
+                                return Image.file(File(uri.path));
+                              }
+                              return const SizedBox.shrink();
+                            },
+                            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                              p: Theme.of(context).textTheme.bodyMedium?.copyWith(color: onColor),
+                              strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: onColor,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              em: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: onColor,
+                                fontStyle: FontStyle.italic,
+                              ),
+                              listBullet: Theme.of(context).textTheme.bodyMedium?.copyWith(color: onColor),
+                              // The default blockquote (used for "quick
+                              // summary"-style highlighted callouts) has
+                              // poor contrast against this app's theme by
+                              // default — tie it to the color scheme
+                              // explicitly so it stays readable in both
+                              // light and dark mode.
+                              blockquote: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: Theme.of(context).colorScheme.onSecondaryContainer,
+                              ),
+                              blockquoteDecoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.secondaryContainer,
+                                borderRadius: BorderRadius.circular(AppRadii.sm),
+                              ),
+                              blockquotePadding: const EdgeInsets.all(AppSpacing.md),
+                              code: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                              codeblockDecoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(AppRadii.sm),
+                              ),
                             ),
                           ),
-                        ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Tooltip(
+                              message: 'Copy',
+                              child: HoverSurface(
+                                onTap: () => _copyMessage(context, msg.text),
+                                padding: const EdgeInsets.all(AppSpacing.xs),
+                                borderRadius: BorderRadius.circular(AppRadii.sm),
+                                child: Icon(
+                                  Icons.copy_outlined,
+                                  size: 14,
+                                  color: onColor.withValues(alpha: 0.7),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

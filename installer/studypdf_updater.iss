@@ -3,7 +3,7 @@
 ; ====================================================
 
 #define MyAppName      "StudyPDF"
-#define MyAppVersion   "1.2.0"
+#define MyAppVersion   "2.0.0"
 #define MyAppExeName   "studypdf.exe"
 #define MySourceRoot   "..\build\installer\stage"
 
@@ -13,7 +13,7 @@ AppName={#MyAppName} Updater
 AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\{#MyAppName}
 OutputDir=..\build\installer\dist
-OutputBaseFilename=StudyPDF-Updater-v1.2.0
+OutputBaseFilename=StudyPDF-Updater-v2.0.0
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:studypdf/core/ai/providers/openrouter_provider.dart';
+import 'package:studypdf/core/theme/design_tokens.dart';
 import 'package:studypdf/models/workspace_preferences.dart';
 
 class WorkspaceSettingsPage extends StatefulWidget {
@@ -13,7 +15,13 @@ class WorkspaceSettingsPage extends StatefulWidget {
     required this.openAiApiKey,
     required this.groqApiKey,
     required this.geminiApiKey,
+    required this.openRouterApiKey,
     required this.onApiKeyChanged,
+    required this.openRouterModelId,
+    required this.openRouterFreeModels,
+    required this.openRouterFreeModelsLoading,
+    required this.onOpenRouterModelChanged,
+    required this.onRefreshOpenRouterModels,
     required this.webSearchEnabled,
     required this.crossDocRagEnabled,
     required this.onCrossDocRagChanged,
@@ -25,6 +33,8 @@ class WorkspaceSettingsPage extends StatefulWidget {
     required this.pesuUsername,
     required this.pesuPassword,
     required this.onPesuCredentialsChanged,
+    required this.codeExecutionBackend,
+    required this.onCodeExecutionBackendChanged,
   });
 
   final WorkspacePreferences preferences;
@@ -36,8 +46,14 @@ class WorkspaceSettingsPage extends StatefulWidget {
   final String openAiApiKey;
   final String groqApiKey;
   final String geminiApiKey;
+  final String openRouterApiKey;
   final Future<void> Function({required String providerId, required String key})
   onApiKeyChanged;
+  final String openRouterModelId;
+  final List<OpenRouterFreeModel> openRouterFreeModels;
+  final bool openRouterFreeModelsLoading;
+  final Future<void> Function(String modelId) onOpenRouterModelChanged;
+  final Future<void> Function() onRefreshOpenRouterModels;
   final bool webSearchEnabled;
   final bool crossDocRagEnabled;
   final ValueChanged<bool> onCrossDocRagChanged;
@@ -58,6 +74,8 @@ class WorkspaceSettingsPage extends StatefulWidget {
     required String password,
   })
   onPesuCredentialsChanged;
+  final String codeExecutionBackend;
+  final Future<void> Function(String backend) onCodeExecutionBackendChanged;
 
   @override
   State<WorkspaceSettingsPage> createState() => _WorkspaceSettingsPageState();
@@ -67,6 +85,7 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
   late final TextEditingController _openAiController;
   late final TextEditingController _groqController;
   late final TextEditingController _geminiController;
+  late final TextEditingController _openRouterController;
   late final TextEditingController _googleApiController;
   late final TextEditingController _googleCxController;
   late final TextEditingController _pesuUsernameController;
@@ -74,6 +93,7 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
   bool _hideOpenAiKey = true;
   bool _hideGroqKey = true;
   bool _hideGeminiKey = true;
+  bool _hideOpenRouterKey = true;
   bool _hideGoogleApiKey = true;
   bool _hidePesuPassword = true;
   late bool _webSearchEnabled;
@@ -84,6 +104,9 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     _openAiController = TextEditingController(text: widget.openAiApiKey);
     _groqController = TextEditingController(text: widget.groqApiKey);
     _geminiController = TextEditingController(text: widget.geminiApiKey);
+    _openRouterController = TextEditingController(
+      text: widget.openRouterApiKey,
+    );
     _googleApiController = TextEditingController(
       text: widget.googleSearchApiKey,
     );
@@ -109,10 +132,13 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
   Widget _layoutPreview() {
     Widget panelChip(String text, Color color) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
         decoration: BoxDecoration(
           color: color,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(AppRadii.sm),
         ),
         child: Text(text, style: const TextStyle(fontSize: 11)),
       );
@@ -125,7 +151,7 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
         height: 80,
         decoration: BoxDecoration(
           border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadii.md),
         ),
         child: const Center(child: Text('PDF')),
       ),
@@ -185,16 +211,16 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     place(notes, effectiveNotesPos);
 
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppRadii.md),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Layout preview', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -229,6 +255,10 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
         widget.geminiApiKey != _geminiController.text) {
       _geminiController.text = widget.geminiApiKey;
     }
+    if (oldWidget.openRouterApiKey != widget.openRouterApiKey &&
+        widget.openRouterApiKey != _openRouterController.text) {
+      _openRouterController.text = widget.openRouterApiKey;
+    }
     if (oldWidget.googleSearchApiKey != widget.googleSearchApiKey &&
         widget.googleSearchApiKey != _googleApiController.text) {
       _googleApiController.text = widget.googleSearchApiKey;
@@ -255,6 +285,7 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     _openAiController.dispose();
     _groqController.dispose();
     _geminiController.dispose();
+    _openRouterController.dispose();
     _googleApiController.dispose();
     _googleCxController.dispose();
     _pesuUsernameController.dispose();
@@ -303,6 +334,62 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     ).showSnackBar(const SnackBar(content: Text('PESU credentials saved')));
   }
 
+  Widget _openRouterModelPicker(BuildContext context) {
+    // Always include the current selection, even if the fetched free-model
+    // list hasn't loaded yet (or failed) — the dropdown must never show an
+    // empty/broken state for the model the user has already picked.
+    final knownIds = widget.openRouterFreeModels.map((m) => m.id).toSet();
+    final items = <DropdownMenuItem<String>>[
+      if (!knownIds.contains(widget.openRouterModelId))
+        DropdownMenuItem(
+          value: widget.openRouterModelId,
+          child: Text(widget.openRouterModelId),
+        ),
+      ...widget.openRouterFreeModels.map(
+        (model) => DropdownMenuItem(
+          value: model.id,
+          child: Text(model.name, overflow: TextOverflow.ellipsis),
+        ),
+      ),
+    ];
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: widget.openRouterModelId,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'OpenRouter model',
+              border: OutlineInputBorder(),
+            ),
+            items: items,
+            onChanged: (value) {
+              if (value != null) {
+                widget.onOpenRouterModelChanged(value);
+              }
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Refresh free-model list',
+          onPressed: widget.openRouterFreeModelsLoading
+              ? null
+              : () => widget.onRefreshOpenRouterModels(),
+          icon: widget.openRouterFreeModelsLoading
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.refresh),
+        ),
+      ],
+    );
+  }
+
   Widget _apiKeyField({
     required TextEditingController controller,
     required String label,
@@ -344,8 +431,12 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
     Widget? trailing,
   }) {
     return Card(
+      elevation: AppElevation.low,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -354,13 +445,15 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                 Expanded(
                   child: Text(
                     title,
-                    style: Theme.of(context).textTheme.titleLarge,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 if (trailing != null) trailing,
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: AppSpacing.md),
             ...children,
           ],
         ),
@@ -377,6 +470,10 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              'OpenRouter: openrouter.ai/settings/keys (free tier, no card needed)',
+            ),
+            SizedBox(height: 6),
             Text('OpenAI: platform.openai.com/api-keys'),
             SizedBox(height: 6),
             Text('Groq: console.groq.com/keys'),
@@ -427,7 +524,7 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       child: Align(
         alignment: Alignment.topLeft,
         child: ConstrainedBox(
@@ -481,54 +578,109 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                         icon: const Icon(Icons.help_outline),
                       ),
                       children: [
+                        Text(
+                          'OpenRouter (recommended — default)',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'One free API key covers a rotating catalog of free '
+                          'models, no card required.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
                         _apiKeyField(
-                          controller: _openAiController,
-                          label: 'OpenAI',
-                          hidden: _hideOpenAiKey,
+                          controller: _openRouterController,
+                          label: 'OpenRouter',
+                          hidden: _hideOpenRouterKey,
                           onToggleHidden: () {
                             setState(() {
-                              _hideOpenAiKey = !_hideOpenAiKey;
+                              _hideOpenRouterKey = !_hideOpenRouterKey;
                             });
                           },
                           onSave: () => _saveApiKey(
-                            'openai',
-                            _openAiController,
-                            'OpenAI',
+                            'openrouter',
+                            _openRouterController,
+                            'OpenRouter',
                           ),
                         ),
                         const SizedBox(height: 8),
-                        _apiKeyField(
-                          controller: _groqController,
-                          label: 'Groq',
-                          hidden: _hideGroqKey,
-                          onToggleHidden: () {
-                            setState(() {
-                              _hideGroqKey = !_hideGroqKey;
-                            });
-                          },
-                          onSave: () =>
-                              _saveApiKey('groq', _groqController, 'Groq'),
-                        ),
-                        const SizedBox(height: 8),
-                        _apiKeyField(
-                          controller: _geminiController,
-                          label: 'Gemini',
-                          hidden: _hideGeminiKey,
-                          onToggleHidden: () {
-                            setState(() {
-                              _hideGeminiKey = !_hideGeminiKey;
-                            });
-                          },
-                          onSave: () => _saveApiKey(
-                            'gemini',
-                            _geminiController,
-                            'Gemini',
+                        _openRouterModelPicker(context),
+                        const SizedBox(height: 16),
+                        const Divider(),
+                        Theme(
+                          // Flatten the ExpansionTile's default divider/
+                          // shape so it reads as part of this card, not a
+                          // separately-boxed element.
+                          data: Theme.of(
+                            context,
+                          ).copyWith(dividerColor: Colors.transparent),
+                          child: ExpansionTile(
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            title: const Text('Other providers (advanced)'),
+                            subtitle: const Text(
+                              'OpenAI, Groq, Gemini — only needed if you want a direct key instead of OpenRouter.',
+                            ),
+                            children: [
+                              const SizedBox(height: 8),
+                              _apiKeyField(
+                                controller: _openAiController,
+                                label: 'OpenAI',
+                                hidden: _hideOpenAiKey,
+                                onToggleHidden: () {
+                                  setState(() {
+                                    _hideOpenAiKey = !_hideOpenAiKey;
+                                  });
+                                },
+                                onSave: () => _saveApiKey(
+                                  'openai',
+                                  _openAiController,
+                                  'OpenAI',
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _apiKeyField(
+                                controller: _groqController,
+                                label: 'Groq',
+                                hidden: _hideGroqKey,
+                                onToggleHidden: () {
+                                  setState(() {
+                                    _hideGroqKey = !_hideGroqKey;
+                                  });
+                                },
+                                onSave: () => _saveApiKey(
+                                  'groq',
+                                  _groqController,
+                                  'Groq',
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _apiKeyField(
+                                controller: _geminiController,
+                                label: 'Gemini',
+                                hidden: _hideGeminiKey,
+                                onToggleHidden: () {
+                                  setState(() {
+                                    _hideGeminiKey = !_hideGeminiKey;
+                                  });
+                                },
+                                onSave: () => _saveApiKey(
+                                  'gemini',
+                                  _geminiController,
+                                  'Gemini',
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 12),
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
-                          title: const Text('Query all open tabs (Cross-Document RAG)'),
+                          title: const Text(
+                            'Query all open tabs (Cross-Document RAG)',
+                          ),
                           subtitle: const Text(
                             'When enabled, the AI will search across all open PDFs instead of just the active one.(Good for comparing across documents but more token expensive)',
                           ),
@@ -604,6 +756,46 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                     const SizedBox(height: 12),
                     _settingsCard(
                       context: context,
+                      title: 'Code Terminal',
+                      children: [
+                        Text(
+                          'Choose how code you run in the Code Terminal panel gets executed.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
+                        RadioListTile<String>(
+                          contentPadding: EdgeInsets.zero,
+                          value: 'piston',
+                          groupValue: widget.codeExecutionBackend,
+                          title: const Text('Piston (free, external)'),
+                          subtitle: const Text(
+                            'Runs on a public free service — works immediately, no local setup, but your code is sent externally.',
+                          ),
+                          onChanged: (value) {
+                            if (value != null) {
+                              widget.onCodeExecutionBackendChanged(value);
+                            }
+                          },
+                        ),
+                        RadioListTile<String>(
+                          contentPadding: EdgeInsets.zero,
+                          value: 'local',
+                          groupValue: widget.codeExecutionBackend,
+                          title: const Text('Local (desktop-only, private)'),
+                          subtitle: const Text(
+                            'Runs using interpreters/compilers already installed on this PC (python, node, gcc/g++, javac) — nothing leaves your machine, but the relevant toolchain must be installed.',
+                          ),
+                          onChanged: (value) {
+                            if (value != null) {
+                              widget.onCodeExecutionBackendChanged(value);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _settingsCard(
+                      context: context,
                       title: 'Workspace Defaults',
                       children: [
                         DropdownButtonFormField<String>(
@@ -613,6 +805,10 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                             border: OutlineInputBorder(),
                           ),
                           items: const [
+                            DropdownMenuItem(
+                              value: 'openrouter',
+                              child: Text('OpenRouter (recommended)'),
+                            ),
                             DropdownMenuItem(
                               value: 'openai',
                               child: Text('OpenAI'),
@@ -663,8 +859,8 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                               final flipped = value == PanelDockPosition.left
                                   ? PanelDockPosition.right
                                   : value == PanelDockPosition.right
-                                      ? PanelDockPosition.left
-                                      : PanelDockPosition.right;
+                                  ? PanelDockPosition.left
+                                  : PanelDockPosition.right;
                               newPrefs = newPrefs.copyWith(
                                 notesDockPosition: flipped,
                               );
@@ -693,12 +889,13 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                             }
                             // Enforce mutual exclusion: if chosen position matches AI, flip to opposite.
                             PanelDockPosition effective = value;
-                            if (effective == widget.preferences.aiDockPosition) {
+                            if (effective ==
+                                widget.preferences.aiDockPosition) {
                               effective = effective == PanelDockPosition.left
                                   ? PanelDockPosition.right
                                   : effective == PanelDockPosition.right
-                                      ? PanelDockPosition.left
-                                      : PanelDockPosition.right;
+                                  ? PanelDockPosition.left
+                                  : PanelDockPosition.right;
                             }
                             widget.onChanged(
                               widget.preferences.copyWith(
@@ -737,12 +934,30 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Bottom panel spans full width'),
-                          subtitle: const Text('When disabled, side panels span top-to-bottom constraints'),
+                          subtitle: const Text(
+                            'When disabled, side panels span top-to-bottom constraints',
+                          ),
                           value: widget.preferences.bottomPanelSpansEntireWidth,
                           onChanged: (value) {
                             widget.onChanged(
                               widget.preferences.copyWith(
                                 bottomPanelSpansEntireWidth: value,
+                              ),
+                            );
+                          },
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Enable PESU Course Downloader'),
+                          subtitle: const Text(
+                            'Off by default — only relevant if you\'re a PES student. '
+                            'Adds a Downloads section for fetching course materials directly.',
+                          ),
+                          value: widget.preferences.enablePesuDownloader,
+                          onChanged: (value) {
+                            widget.onChanged(
+                              widget.preferences.copyWith(
+                                enablePesuDownloader: value,
                               ),
                             );
                           },
@@ -765,51 +980,53 @@ class _WorkspaceSettingsPageState extends State<WorkspaceSettingsPage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    _settingsCard(
-                      context: context,
-                      title: 'Downloader Credentials',
-                      children: [
-                        TextField(
-                          controller: _pesuUsernameController,
-                          onSubmitted: (_) => _savePesuCredentials(),
-                          decoration: const InputDecoration(
-                            labelText: 'PESU Username (SRN)',
-                            border: OutlineInputBorder(),
+                    if (widget.preferences.enablePesuDownloader) ...[
+                      const SizedBox(height: 12),
+                      _settingsCard(
+                        context: context,
+                        title: 'Downloader Credentials',
+                        children: [
+                          TextField(
+                            controller: _pesuUsernameController,
+                            onSubmitted: (_) => _savePesuCredentials(),
+                            decoration: const InputDecoration(
+                              labelText: 'PESU Username (SRN)',
+                              border: OutlineInputBorder(),
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _pesuPasswordController,
-                          obscureText: _hidePesuPassword,
-                          onSubmitted: (_) => _savePesuCredentials(),
-                          decoration: InputDecoration(
-                            labelText: 'PESU Password',
-                            border: const OutlineInputBorder(),
-                            suffixIcon: IconButton(
-                              tooltip: _hidePesuPassword
-                                  ? 'Show password'
-                                  : 'Hide password',
-                              onPressed: () {
-                                setState(() {
-                                  _hidePesuPassword = !_hidePesuPassword;
-                                });
-                              },
-                              icon: Icon(
-                                _hidePesuPassword
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _pesuPasswordController,
+                            obscureText: _hidePesuPassword,
+                            onSubmitted: (_) => _savePesuCredentials(),
+                            decoration: InputDecoration(
+                              labelText: 'PESU Password',
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                tooltip: _hidePesuPassword
+                                    ? 'Show password'
+                                    : 'Hide password',
+                                onPressed: () {
+                                  setState(() {
+                                    _hidePesuPassword = !_hidePesuPassword;
+                                  });
+                                },
+                                icon: Icon(
+                                  _hidePesuPassword
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        FilledButton(
-                          onPressed: _savePesuCredentials,
-                          child: const Text('Save Downloader Credentials'),
-                        ),
-                      ],
-                    ),
+                          const SizedBox(height: 8),
+                          FilledButton(
+                            onPressed: _savePesuCredentials,
+                            child: const Text('Save Downloader Credentials'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

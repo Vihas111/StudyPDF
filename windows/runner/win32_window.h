@@ -55,6 +55,12 @@ class Win32Window {
   // Return a RECT representing the bounds of the current client area.
   RECT GetClientArea();
 
+  // Sets the minimum window size in logical pixels (DPI-scaled internally
+  // to match how |Create| scales its incoming |size|). Takes effect on the
+  // next WM_GETMINMAXINFO, i.e. the next resize attempt — it does not
+  // itself resize an already-too-small window.
+  void SetMinSize(unsigned int width, unsigned int height);
+
  protected:
   // Processes and route salient window messages for mouse handling,
   // size change and DPI. Delegates handling of these to member overloads that
@@ -91,6 +97,12 @@ class Win32Window {
   static void UpdateTheme(HWND const window);
 
   bool quit_on_close_ = false;
+
+  // Logical-pixel minimum window size, applied (DPI-scaled) in the
+  // WM_GETMINMAXINFO handler. Defaults match the floor set at window
+  // creation in flutter_window.cpp.
+  unsigned int min_width_ = 760;
+  unsigned int min_height_ = 560;
 
   // window handle for top level window.
   HWND window_handle_ = nullptr;

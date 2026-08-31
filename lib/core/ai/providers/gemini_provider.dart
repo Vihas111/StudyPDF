@@ -17,6 +17,7 @@ class GeminiProvider extends AIProvider {
     required String prompt,
     required String context,
     String? apiKey,
+    String? model,
   }) async {
     final key = apiKey?.trim() ?? '';
     if (key.isEmpty) {

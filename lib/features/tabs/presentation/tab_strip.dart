@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:studypdf/core/theme/design_tokens.dart';
 import 'package:studypdf/models/pdf_document.dart';
 import 'package:studypdf/models/tab_group.dart';
 
@@ -139,31 +140,40 @@ class _TabStripState extends State<TabStrip> {
   Widget _groupChip(BuildContext context, TabGroup group) {
     final groupHasActiveTab = group.tabIds.contains(widget.activeTabId);
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: GestureDetector(
-        onSecondaryTapDown: (details) async {
-          if (_shiftPressed) {
-            widget.onShiftRightClickGroup(group.id);
-            return;
-          }
-          await widget.onGroupSecondaryTap(group.id, details.globalPosition);
-        },
-        child: InputChip(
-          selected: groupHasActiveTab,
-          avatar: Icon(
-            group.isCollapsed
-                ? Icons.keyboard_arrow_right
-                : Icons.keyboard_arrow_down,
-            size: 18,
+      padding: const EdgeInsets.only(right: AppSpacing.sm),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onSecondaryTapDown: (details) async {
+            if (_shiftPressed) {
+              widget.onShiftRightClickGroup(group.id);
+              return;
+            }
+            await widget.onGroupSecondaryTap(
+              group.id,
+              details.globalPosition,
+            );
+          },
+          child: InputChip(
+            selected: groupHasActiveTab,
+            avatar: Icon(
+              group.isCollapsed
+                  ? Icons.keyboard_arrow_right
+                  : Icons.keyboard_arrow_down,
+              size: 18,
+            ),
+            label: Text('${group.name} (${group.tabIds.length})'),
+            onPressed: () => widget.onToggleGroupCollapse(group.id),
+            backgroundColor: group.colorValue == null
+                ? null
+                : Color(group.colorValue!),
+            selectedColor: group.colorValue == null
+                ? null
+                : Color(group.colorValue!).withValues(alpha: 0.75),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadii.sm),
+            ),
           ),
-          label: Text('${group.name} (${group.tabIds.length})'),
-          onPressed: () => widget.onToggleGroupCollapse(group.id),
-          backgroundColor: group.colorValue == null
-              ? null
-              : Color(group.colorValue!),
-          selectedColor: group.colorValue == null
-              ? null
-              : Color(group.colorValue!).withValues(alpha: 0.75),
         ),
       ),
     );
@@ -177,29 +187,40 @@ class _TabStripState extends State<TabStrip> {
     final active = doc.id == widget.activeTabId;
     final selectedForGrouping = widget.pendingGroupTabIds.contains(doc.id);
     return Padding(
-      padding: EdgeInsets.only(right: 8, left: grouped ? 8 : 0),
-      child: GestureDetector(
-        onSecondaryTapDown: (details) async {
-          if (_shiftPressed) {
-            widget.onShiftRightClickTab(doc.id);
-            return;
-          }
-          await widget.onTabSecondaryTap(doc.id, details.globalPosition);
-        },
-        child: InputChip(
-          selected: widget.groupSelectionMode ? selectedForGrouping : active,
-          avatar: const Icon(Icons.picture_as_pdf, size: 18),
-          label: Text(doc.title),
-          onPressed: () => widget.groupSelectionMode
-              ? widget.onToggleGroupTab(doc.id)
-              : widget.onSelect(doc.id),
-          onDeleted: () => widget.onClose(doc.id),
-          backgroundColor: doc.tabColorValue == null
-              ? null
-              : Color(doc.tabColorValue!),
-          selectedColor: doc.tabColorValue == null
-              ? null
-              : Color(doc.tabColorValue!).withValues(alpha: 0.75),
+      padding: EdgeInsets.only(
+        right: AppSpacing.sm,
+        left: grouped ? AppSpacing.sm : 0,
+      ),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onSecondaryTapDown: (details) async {
+            if (_shiftPressed) {
+              widget.onShiftRightClickTab(doc.id);
+              return;
+            }
+            await widget.onTabSecondaryTap(doc.id, details.globalPosition);
+          },
+          child: InputChip(
+            selected: widget.groupSelectionMode
+                ? selectedForGrouping
+                : active,
+            avatar: const Icon(Icons.picture_as_pdf, size: 18),
+            label: Text(doc.title),
+            onPressed: () => widget.groupSelectionMode
+                ? widget.onToggleGroupTab(doc.id)
+                : widget.onSelect(doc.id),
+            onDeleted: () => widget.onClose(doc.id),
+            backgroundColor: doc.tabColorValue == null
+                ? null
+                : Color(doc.tabColorValue!),
+            selectedColor: doc.tabColorValue == null
+                ? null
+                : Color(doc.tabColorValue!).withValues(alpha: 0.75),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadii.sm),
+            ),
+          ),
         ),
       ),
     );

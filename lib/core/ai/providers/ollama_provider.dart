@@ -14,6 +14,7 @@ class OllamaProvider extends AIProvider {
     required String prompt,
     required String context,
     String? apiKey,
+    String? model,
   }) async {
     return 'Ollama mock response for: $prompt';
   }

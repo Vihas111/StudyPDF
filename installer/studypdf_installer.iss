@@ -3,7 +3,7 @@
 ; ====================================================
 
 #define MyAppName      "StudyPDF"
-#define MyAppVersion   "1.2.0"
+#define MyAppVersion   "2.0.0"
 #define MyAppPublisher "StudyPDF"
 #define MyAppExeName   "studypdf.exe"
 #define MySourceRoot   "..\build\installer\stage"
@@ -16,7 +16,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=..\build\installer\dist
-OutputBaseFilename=StudyPDF-Setup-v1.2.0
+OutputBaseFilename=StudyPDF-Setup-v2.0.0
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
