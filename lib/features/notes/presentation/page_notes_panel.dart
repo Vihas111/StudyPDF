@@ -80,6 +80,46 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
     _dirty = false;
   }
 
+  void _save() {
+    final value = _controller.text.trim();
+    if (value.isEmpty) return;
+    widget.onSave(value);
+    _dirty = false;
+    setState(() {});
+  }
+
+  KeyEventResult _handleEditorKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    final isCtrlEnter =
+        event.logicalKey == LogicalKeyboardKey.enter &&
+        (HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed);
+    if (isCtrlEnter) {
+      _save();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.tab) {
+      // Plain Tab in a TextField moves focus by default; inside a note
+      // editor (especially while writing a code block) it should insert
+      // an indent instead, matching normal code-editor behavior.
+      final value = _controller.value;
+      final selection = value.selection;
+      final text = value.text;
+      final start = selection.isValid ? selection.start : text.length;
+      final end = selection.isValid ? selection.end : text.length;
+      const indent = '    ';
+      final next = text.replaceRange(start, end, indent);
+      _controller.value = TextEditingValue(
+        text: next,
+        selection: TextSelection.collapsed(offset: start + indent.length),
+      );
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _showNoteContextMenu(
     BuildContext context,
     TapDownDetails details,
@@ -147,17 +187,20 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
           ]);
 
           // ── Editor area ───────────────────────────────────────────────────
-          final editorArea = TextField(
-            controller: _controller,
-            focusNode: _editorFocusNode,
-            expands: hasFiniteHeight,
-            minLines: hasFiniteHeight ? null : 12,
-            maxLines: null,
-            textAlignVertical: TextAlignVertical.top,
-            decoration: const InputDecoration(
-              hintText:
-                  'Write markdown notes here. Example:\n## Key ideas\n- point 1\n```python\nprint("hello")\n```',
-              border: OutlineInputBorder(),
+          final editorArea = Focus(
+            onKeyEvent: _handleEditorKey,
+            child: TextField(
+              controller: _controller,
+              focusNode: _editorFocusNode,
+              expands: hasFiniteHeight,
+              minLines: hasFiniteHeight ? null : 12,
+              maxLines: null,
+              textAlignVertical: TextAlignVertical.top,
+              decoration: const InputDecoration(
+                hintText:
+                    'Write markdown notes here. Example:\n## Key ideas\n- point 1\n```python\nprint("hello")\n```\n\n(Tab indents, Ctrl+Enter saves.)',
+                border: OutlineInputBorder(),
+              ),
             ),
           );
 
@@ -165,15 +208,9 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
           final saveButton = Align(
             alignment: Alignment.centerRight,
             child: FilledButton.icon(
-              onPressed: () {
-                final value = _controller.text.trim();
-                if (value.isEmpty) return;
-                widget.onSave(value);
-                _dirty = false;
-                setState(() {});
-              },
+              onPressed: _save,
               icon: const Icon(Icons.save_outlined),
-              label: const Text('Save note'),
+              label: const Text('Save note (Ctrl+Enter)'),
             ),
           );
 
@@ -203,6 +240,24 @@ class _PageNotesPanelState extends State<PageNotesPanel> {
                           inlineSyntaxes: [UnderlineSyntax()],
                           builders: {'u': UnderlineBuilder()},
                           imageBuilder: (uri, title, alt) => Image.file(File(uri.path)),
+                          // Purely visual — reads like a small code editor
+                          // box (monospace, distinct background), not an
+                          // executable one; that's what the Code Terminal
+                          // panel is for.
+                          styleSheet: MarkdownStyleSheet(
+                            code: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                            ),
+                            codeblockPadding: const EdgeInsets.all(12),
+                            codeblockDecoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Theme.of(context).dividerColor,
+                              ),
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 6),
                         Text(

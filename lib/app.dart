@@ -1,30 +1,21 @@
-import 'dart:convert';
-import 'dart:io';
+import 'dart:async';
 
-import 'package:desktop_multi_window/desktop_multi_window.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:studypdf/core/ai/ai_provider_registry.dart';
-import 'package:studypdf/core/ai/rag/google_search_service.dart';
-import 'package:studypdf/core/ai/rag/pdf_rag_service.dart';
-import 'package:studypdf/core/storage/file_library_service.dart';
-import 'package:studypdf/core/storage/local_store.dart';
-import 'package:studypdf/core/storage/rich_notes_store.dart';
-import 'package:studypdf/core/storage/merged_notes_store.dart';
-import 'package:studypdf/models/merged_note.dart';
+import 'package:studypdf/core/state/ai_settings_controller.dart';
+import 'package:studypdf/core/state/window_controller.dart';
+import 'package:studypdf/core/state/workspace_controller.dart';
+import 'package:studypdf/core/theme/app_theme.dart';
 import 'package:studypdf/features/downloader/presentation/pesu_downloader_page.dart';
 import 'package:studypdf/features/home/presentation/document_library_page.dart';
+import 'package:studypdf/features/onboarding/presentation/first_run_page.dart';
 import 'package:studypdf/features/notes/presentation/merged_notes_library_page.dart';
 import 'package:studypdf/features/settings/presentation/workspace_settings_page.dart';
 import 'package:studypdf/features/workspace/presentation/study_workspace_page.dart';
-import 'package:studypdf/models/annotation.dart';
-import 'package:studypdf/models/library_folder.dart';
 import 'package:studypdf/models/pdf_document.dart';
-import 'package:studypdf/models/pdf_viewport_data.dart';
-import 'package:studypdf/models/workspace_preferences.dart';
-import 'package:studypdf/models/workspace_shortcut.dart';
+
+export 'package:studypdf/core/state/workspace_controller.dart' show AppSection;
 
 class StudyPdfApp extends StatefulWidget {
   const StudyPdfApp({super.key});
@@ -35,6 +26,36 @@ class StudyPdfApp extends StatefulWidget {
 
 class _StudyPdfAppState extends State<StudyPdfApp> {
   ThemeMode _themeMode = ThemeMode.system;
+  // null while still checking prefs; the previously-buried
+  // setRootPath/library-root capability gets a proper first-run moment
+  // instead of only living in Settings (Phase 5).
+  bool? _needsFirstRun;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkFirstRun();
+  }
+
+  Future<void> _checkFirstRun() async {
+    final prefs = await SharedPreferences.getInstance();
+    var completed =
+        prefs.getBool(FirstRunPrefsKeys.onboardingCompleted) ?? false;
+    if (!completed) {
+      // Grandfather in anyone upgrading from before this flag existed —
+      // if a library root was already chosen (the old Settings-only
+      // path), this is not actually their first run.
+      final existingRoot = prefs.getString(FirstRunPrefsKeys.libraryRootPath);
+      if (existingRoot != null && existingRoot.trim().isNotEmpty) {
+        completed = true;
+        await prefs.setBool(FirstRunPrefsKeys.onboardingCompleted, true);
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _needsFirstRun = !completed;
+    });
+  }
 
   void _handleThemeModeChanged(ThemeMode mode) {
     if (_themeMode == mode) {
@@ -47,27 +68,23 @@ class _StudyPdfAppState extends State<StudyPdfApp> {
 
   @override
   Widget build(BuildContext context) {
+    final needsFirstRun = _needsFirstRun;
     return MaterialApp(
       title: 'StudyPDF',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF255F85)),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          brightness: Brightness.dark,
-          seedColor: const Color(0xFF255F85),
-        ),
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       themeMode: _themeMode,
-      home: StudyShellPage(onThemeModeChanged: _handleThemeModeChanged),
+      home: needsFirstRun == null
+          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          : needsFirstRun
+          ? FirstRunPage(
+              onComplete: () => setState(() => _needsFirstRun = false),
+            )
+          : StudyShellPage(onThemeModeChanged: _handleThemeModeChanged),
     );
   }
 }
-
-enum AppSection { home, workspace, downloader, notes, settings }
 
 class StudyShellPage extends StatefulWidget {
   const StudyShellPage({super.key, required this.onThemeModeChanged});
@@ -79,1754 +96,112 @@ class StudyShellPage extends StatefulWidget {
 }
 
 class _StudyShellPageState extends State<StudyShellPage> {
-  final LocalStore _store = LocalStore();
-  final RichNotesStore _richNotesStore = RichNotesStore();
-  final MergedNotesStore _mergedNotesStore = MergedNotesStore();
-  final AIProviderRegistry _providerRegistry = AIProviderRegistry();
-  final GoogleSearchService _googleSearchService = GoogleSearchService();
-  final PdfRagService _ragService = PdfRagService();
-  final FileLibraryService _fileLibraryService = FileLibraryService();
-
-  AppSection _section = AppSection.home;
-  String _query = '';
-  String _selectedFolderPath = '';
-  bool _loading = true;
-  String _libraryRoot = '';
-  WorkspacePreferences _workspacePreferences = const WorkspacePreferences();
-  ThemeMode _themeMode = ThemeMode.system;
-  String _openAiApiKey = '';
-  String _groqApiKey = '';
-  String _geminiApiKey = '';
-  String _defaultAiProviderId = 'openai';
-  String _activeAiProviderId = 'openai';
-  bool _webSearchEnabled = false;
-  bool _crossDocRagEnabled = false;
-  String _googleSearchApiKey = '';
-  String _googleSearchCx = '';
-  String _pesuUsername = '';
-  String _pesuPassword = '';
-  List<WorkspaceShortcut> _workspaceShortcuts = const [];
-  Map<String, int> _tabColorsByDocumentId = <String, int>{};
-  Map<String, int> _lastReadPageByDocumentId = <String, int>{};
-  ShortcutLaunchRequest? _shortcutLaunchRequest;
-  int _shortcutLaunchNonce = 0;
-
-  List<PdfDocument> _documents = [];
-  List<LibraryFolder> _folders = [];
-  List<PdfDocument> _openTabs = [];
-  String? _activeTabId;
-  PdfViewportData _viewport = const PdfViewportData(
-    currentPage: 1,
-    totalPages: 1,
-    pageText: '',
+  late final WorkspaceController _workspace = WorkspaceController();
+  late final AiSettingsController _ai = AiSettingsController(
+    workspace: _workspace,
+  );
+  late final WindowController _window = WindowController(
+    workspace: _workspace,
+    ai: _ai,
   );
 
-  String _assistantOutput =
-      'AI output will appear here. Select a prompt like "Explain this page".';
-
-  List<Annotation> _pageAnnotations = const [];
-  final Set<int> _externalAiWindowIds = <int>{};
-  final Set<int> _externalNotesWindowIds = <int>{};
-
-  PdfDocument? get _activeDocument {
-    if (_activeTabId == null) {
-      return null;
-    }
-    for (final doc in _openTabs) {
-      if (doc.id == _activeTabId) {
-        return doc;
-      }
-    }
-    return null;
-  }
+  String _query = '';
 
   @override
   void initState() {
     super.initState();
-    _setupInterWindowSync();
+    _window.setupInterWindowSync();
     _initialize();
   }
 
-  void _setupInterWindowSync() {
-    DesktopMultiWindow.setMethodHandler((call, fromWindowId) async {
-      if (call.method == 'externalWindowReady') {
-        final data = (call.arguments as Map).cast<String, dynamic>();
-        final panel = data['panel'] as String? ?? '';
-        if (panel == 'ai') {
-          _externalAiWindowIds.add(fromWindowId);
-          await _pushAiStateToWindow(fromWindowId);
-        } else if (panel == 'notes') {
-          _externalNotesWindowIds.add(fromWindowId);
-          await _pushNotesStateToWindow(fromWindowId);
-        }
-        return {'ok': true};
-      }
-
-      if (call.method == 'externalNoteSaved') {
-        final data = (call.arguments as Map).cast<String, dynamic>();
-        final annotation = Annotation(
-          id:
-              data['id'] as String? ??
-              DateTime.now().microsecondsSinceEpoch.toString(),
-          pdfId: data['pdfId'] as String? ?? '',
-          pageNumber: data['pageNumber'] as int? ?? 1,
-          content: data['content'] as String? ?? '',
-          createdAt:
-              DateTime.tryParse(data['createdAt'] as String? ?? '') ??
-              DateTime.now(),
-        );
-        _store.upsertAnnotation(annotation);
-        await _richNotesStore.upsertNote(
-          pdfId: annotation.pdfId,
-          pageNumber: annotation.pageNumber,
-          deltaJson: _toPlainTextDeltaJson(annotation.content),
-        );
-        if (_activeDocument?.id == annotation.pdfId &&
-            _viewport.currentPage == annotation.pageNumber) {
-          _refreshAnnotations();
-          if (mounted) {
-            setState(() {});
-          }
-        }
-        await _broadcastNotesState();
-        return {'ok': true};
-      }
-
-      if (call.method == 'externalAiOutputUpdated') {
-        final data = (call.arguments as Map).cast<String, dynamic>();
-        final text = data['assistantOutput'] as String? ?? '';
-        final providerId = data['providerId'] as String? ?? '';
-        if (providerId.isNotEmpty && providerId != _activeAiProviderId) {
-          _activeAiProviderId = providerId;
-        }
-        if (text.isNotEmpty) {
-          _assistantOutput = text;
-          if (mounted) {
-            setState(() {});
-          }
-          await _broadcastAiState();
-        }
-        return {'ok': true};
-      }
-
-      if (call.method == 'externalAiProviderChanged') {
-        final data = (call.arguments as Map).cast<String, dynamic>();
-        final providerId = data['providerId'] as String? ?? '';
-        if (providerId.isNotEmpty) {
-          _handleAiProviderChanged(providerId);
-          return {'ok': true};
-        }
-        return {'ok': false};
-      }
-
-      return null;
-    });
-  }
-
   Future<void> _initialize() async {
-    await _richNotesStore.load();
-    await _mergedNotesStore.load();
-    await _loadAppPreferences();
-    _libraryRoot = await _fileLibraryService.getRootPath();
-    await _reloadLibrary();
+    await _workspace.initialize();
+    widget.onThemeModeChanged(_workspace.themeMode);
+    await _ai.loadPreferences();
+    // Fire-and-forget: populates the Settings model dropdown without
+    // blocking startup on a network call.
+    unawaited(_ai.loadOpenRouterFreeModels());
   }
 
-  Future<void> _loadAppPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    final themeRaw = prefs.getString('app.themeMode') ?? 'system';
-    _themeMode = _themeModeFromString(themeRaw);
-    widget.onThemeModeChanged(_themeMode);
-    _openAiApiKey = prefs.getString('ai.openaiApiKey') ?? '';
-    _groqApiKey =
-        prefs.getString('ai.groqApiKey') ??
-        prefs.getString('ai.anthropicApiKey') ??
-        '';
-    _geminiApiKey = prefs.getString('ai.geminiApiKey') ?? '';
-    final rawDefault = prefs.getString('ai.defaultProviderId') ?? 'openai';
-    _defaultAiProviderId = rawDefault == 'anthropic' ? 'groq' : rawDefault;
-    _activeAiProviderId = _defaultAiProviderId;
-    _webSearchEnabled = prefs.getBool('ai.webSearchEnabled') ?? false;
-    _crossDocRagEnabled = prefs.getBool('ai.crossDocRagEnabled') ?? false;
-    _googleSearchApiKey = prefs.getString('ai.googleSearchApiKey') ?? '';
-    _googleSearchCx = prefs.getString('ai.googleSearchEngineId') ?? '';
-    _pesuUsername = prefs.getString('pesu.username') ?? '';
-    _pesuPassword = prefs.getString('pesu.password') ?? '';
-
-    final customRoot = prefs.getString('library.rootPath');
-    if (customRoot != null && customRoot.trim().isNotEmpty) {
-      await _fileLibraryService.setRootPath(customRoot);
-    }
-
-    final legacyNotesOrientation =
-        prefs.getString('workspace.notesOrientation') ?? 'bottom';
-    final aiDockRaw = prefs.getString('workspace.aiDockPosition') ?? 'right';
-    final notesDockRaw =
-        prefs.getString('workspace.notesDockPosition') ??
-        (legacyNotesOrientation == 'right' ? 'right' : 'bottom');
-    final startAi = prefs.getBool('workspace.startWithAiVisible') ?? true;
-    final startNotes = prefs.getBool('workspace.startWithNotesVisible') ?? true;
-
-    _workspacePreferences = WorkspacePreferences(
-      aiDockPosition: _panelDockPositionFromRaw(aiDockRaw),
-      notesDockPosition: _panelDockPositionFromRaw(notesDockRaw),
-      startWithAiVisible: startAi,
-      startWithNotesVisible: startNotes,
-    );
-
-    final shortcutsRaw = prefs.getString('workspace.shortcuts');
-    if (shortcutsRaw != null && shortcutsRaw.trim().isNotEmpty) {
-      try {
-        _workspaceShortcuts = WorkspaceShortcut.decodeList(shortcutsRaw);
-      } catch (_) {
-        _workspaceShortcuts = const [];
-      }
-    } else {
-      _workspaceShortcuts = const [];
-    }
-
-    final tabColorsRaw = prefs.getString('workspace.tabColors');
-    if (tabColorsRaw != null && tabColorsRaw.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(tabColorsRaw);
-        if (decoded is Map<String, dynamic>) {
-          _tabColorsByDocumentId = decoded.map(
-            (key, value) => MapEntry(key, value as int),
-          );
-        } else {
-          _tabColorsByDocumentId = <String, int>{};
-        }
-      } catch (_) {
-        _tabColorsByDocumentId = <String, int>{};
-      }
-    } else {
-      _tabColorsByDocumentId = <String, int>{};
-    }
-
-    final lastPagesRaw = prefs.getString('workspace.lastReadPages');
-    if (lastPagesRaw != null && lastPagesRaw.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(lastPagesRaw);
-        if (decoded is Map<String, dynamic>) {
-          _lastReadPageByDocumentId = decoded.map(
-            (key, value) => MapEntry(key, (value as num).toInt()),
-          );
-        } else {
-          _lastReadPageByDocumentId = <String, int>{};
-        }
-      } catch (_) {
-        _lastReadPageByDocumentId = <String, int>{};
-      }
-    } else {
-      _lastReadPageByDocumentId = <String, int>{};
-    }
-  }
-
-  Future<void> _updateWorkspacePreferences(WorkspacePreferences updated) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'workspace.aiDockPosition',
-      _panelDockPositionToRaw(updated.aiDockPosition),
-    );
-    await prefs.setString(
-      'workspace.notesDockPosition',
-      _panelDockPositionToRaw(updated.notesDockPosition),
-    );
-    await prefs.setBool(
-      'workspace.startWithAiVisible',
-      updated.startWithAiVisible,
-    );
-    await prefs.setBool(
-      'workspace.startWithNotesVisible',
-      updated.startWithNotesVisible,
-    );
-
-    if (mounted) {
-      setState(() {
-        _workspacePreferences = updated;
-      });
-    }
-  }
-
-  PanelDockPosition _panelDockPositionFromRaw(String raw) {
-    switch (raw) {
-      case 'left':
-        return PanelDockPosition.left;
-      case 'bottom':
-        return PanelDockPosition.bottom;
-      case 'right':
-      default:
-        return PanelDockPosition.right;
-    }
-  }
-
-  String _panelDockPositionToRaw(PanelDockPosition value) {
-    switch (value) {
-      case PanelDockPosition.left:
-        return 'left';
-      case PanelDockPosition.bottom:
-        return 'bottom';
-      case PanelDockPosition.right:
-        return 'right';
-    }
-  }
-
-  ThemeMode _themeModeFromString(String raw) {
-    switch (raw) {
-      case 'light':
-        return ThemeMode.light;
-      case 'dark':
-        return ThemeMode.dark;
-      default:
-        return ThemeMode.system;
-    }
-  }
-
-  String _themeModeToString(ThemeMode mode) {
-    switch (mode) {
-      case ThemeMode.light:
-        return 'light';
-      case ThemeMode.dark:
-        return 'dark';
-      case ThemeMode.system:
-        return 'system';
-    }
-  }
-
-  Future<void> _updateThemeMode(ThemeMode mode) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('app.themeMode', _themeModeToString(mode));
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _themeMode = mode;
-    });
-    widget.onThemeModeChanged(mode);
-  }
-
-  Future<void> _updateApiKey({
-    required String providerId,
-    required String key,
-  }) async {
-    final trimmed = key.trim();
-    final prefs = await SharedPreferences.getInstance();
-    final prefKey = switch (providerId) {
-      'openai' => 'ai.openaiApiKey',
-      'groq' => 'ai.groqApiKey',
-      'gemini' => 'ai.geminiApiKey',
-      _ => '',
-    };
-    if (prefKey.isEmpty) {
-      return;
-    }
-    await prefs.setString(prefKey, trimmed);
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      switch (providerId) {
-        case 'openai':
-          _openAiApiKey = trimmed;
-          break;
-        case 'groq':
-          _groqApiKey = trimmed;
-          break;
-        case 'gemini':
-          _geminiApiKey = trimmed;
-          break;
-        default:
-          break;
-      }
-    });
-  }
-
-  Future<void> _updateWebSearchSettings({
-    required bool enabled,
-    required String apiKey,
-    required String searchEngineId,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('ai.webSearchEnabled', enabled);
-    await prefs.setString('ai.googleSearchApiKey', apiKey.trim());
-    await prefs.setString('ai.googleSearchEngineId', searchEngineId.trim());
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _webSearchEnabled = enabled;
-      _googleSearchApiKey = apiKey.trim();
-      _googleSearchCx = searchEngineId.trim();
-    });
-  }
-
-  Future<void> _updateCrossDocRagEnabled(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('ai.crossDocRagEnabled', enabled);
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _crossDocRagEnabled = enabled;
-    });
-  }
-
-  Future<void> _updateDefaultAiProvider(String providerId) async {
-    final allowed = {'openai', 'groq', 'gemini', 'ollama'};
-    if (!allowed.contains(providerId)) {
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('ai.defaultProviderId', providerId);
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _defaultAiProviderId = providerId;
-      _activeAiProviderId = providerId;
-    });
-  }
-
-  void _handleAiProviderChanged(String providerId) {
-    if (_activeAiProviderId == providerId) {
-      return;
-    }
-    if (!mounted) {
-      _activeAiProviderId = providerId;
-      return;
-    }
-    setState(() {
-      _activeAiProviderId = providerId;
-    });
-    _broadcastAiState();
-  }
-
-  Future<void> _updatePesuCredentials({
-    required String username,
-    required String password,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('pesu.username', username.trim());
-    await prefs.setString('pesu.password', password);
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _pesuUsername = username.trim();
-      _pesuPassword = password;
-    });
-  }
-
-  Future<void> _changeLibraryRoot() async {
-    final selected = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Choose StudyPDF Library Root',
-    );
-    if (selected == null || selected.trim().isEmpty) {
-      return;
-    }
-
-    await _fileLibraryService.setRootPath(selected);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('library.rootPath', selected);
-
-    _selectedFolderPath = '';
-    _openTabs = const [];
-    _activeTabId = null;
-    _viewport = const PdfViewportData(
-      currentPage: 1,
-      totalPages: 1,
-      pageText: '',
-    );
-    _assistantOutput =
-        'AI output will appear here. Select a prompt like "Explain this page".';
-    _pageAnnotations = const [];
-    _lastReadPageByDocumentId = <String, int>{};
-    await _saveLastReadPages();
-
-    _libraryRoot = await _fileLibraryService.getRootPath();
-    await _reloadLibrary();
-    if (mounted) {
-      setState(() {
-        _section = AppSection.home;
-      });
-    }
-  }
-
-  String get _downloaderRepoPath =>
-      '${Directory.current.path}${Platform.pathSeparator}pesu_course_downloader';
-  String get _downloaderBridgePath =>
-      '$_downloaderRepoPath${Platform.pathSeparator}studypdf_bridge.py';
-  String get _downloaderDownloadsPath =>
-      '$_downloaderRepoPath${Platform.pathSeparator}downloads';
-
-  String _safeCourseFolderName(String input) {
-    final normalized = input
-        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
-        .replaceAll(RegExp(r'\s+'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .trim();
-    if (normalized.isEmpty) {
-      return 'course';
-    }
-    return normalized;
-  }
-
-  Future<String> _resolveDownloaderPythonPath() async {
-    final venvPython = File(
-      '$_downloaderRepoPath${Platform.pathSeparator}venv'
-      '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe',
-    );
-    if (venvPython.existsSync()) {
-      return venvPython.path;
-    }
-    throw Exception(
-      'Downloader environment is not ready. Click "Setup Env" in Downloads first.',
-    );
-  }
-
-  void _ensureDownloaderRepoReady() {
-    final repoDir = Directory(_downloaderRepoPath);
-    if (!repoDir.existsSync()) {
-      throw Exception(
-        'Repository not found at $_downloaderRepoPath. '
-        'Keep pesu_course_downloader in project root.',
-      );
-    }
-    final bridge = File(_downloaderBridgePath);
-    if (!bridge.existsSync()) {
-      throw Exception(
-        'Bridge script missing at $_downloaderBridgePath. '
-        'Pull latest downloader repo files.',
-      );
-    }
-  }
-
-  Future<Map<String, dynamic>> _runDownloaderBridge(List<String> args) async {
-    _ensureDownloaderRepoReady();
-    final python = await _resolveDownloaderPythonPath();
-    final commandArgs = <String>[_downloaderBridgePath, ...args];
-    final result = await Process.run(
-      python,
-      commandArgs,
-      workingDirectory: _downloaderRepoPath,
-    );
-
-    final stdout = (result.stdout ?? '').toString().trim();
-    final stderr = (result.stderr ?? '').toString().trim();
-    final jsonLine = stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.startsWith('{') && line.endsWith('}'))
-        .lastWhere((_) => true, orElse: () => '');
-
-    Map<String, dynamic>? payload;
-    if (jsonLine.isNotEmpty) {
-      final decoded = jsonDecode(jsonLine);
-      if (decoded is Map<String, dynamic>) {
-        payload = decoded;
-      }
-    }
-
-    if (payload == null) {
-      throw Exception(
-        'Downloader returned invalid response (exit ${result.exitCode}).\n'
-        'STDOUT: $stdout\nSTDERR: $stderr',
-      );
-    }
-
-    if (payload['ok'] != true) {
-      throw Exception(payload['error']?.toString() ?? 'Unknown bridge error');
-    }
-
-    if (result.exitCode != 0) {
-      throw Exception(
-        payload['error']?.toString() ??
-            'Downloader failed with exit code ${result.exitCode}',
-      );
-    }
-
-    return payload;
-  }
-
-  Future<void> _runDownloaderSetup() async {
-    _ensureDownloaderRepoReady();
-    final repoDir = Directory(_downloaderRepoPath);
-    final command =
-        'if not exist venv\\Scripts\\python.exe (py -3.12 -m venv venv || py -3.11 -m venv venv || python -m venv venv) '
-        '&& venv\\Scripts\\python.exe -m pip install --upgrade pip '
-        '&& venv\\Scripts\\python.exe -m pip install -r requirements.txt';
-    final result = await Process.run('cmd', [
-      '/c',
-      command,
-    ], workingDirectory: repoDir.path);
-    if (result.exitCode != 0) {
-      throw Exception(
-        'Setup failed (exit ${result.exitCode}).\n${result.stderr}',
-      );
-    }
-  }
-
-  void _ensurePesuCredentialsConfigured() {
-    if (_pesuUsername.trim().isEmpty || _pesuPassword.isEmpty) {
-      throw Exception(
-        'Configure PESU username/password in Settings before loading courses.',
-      );
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchPesuCourses() async {
-    _ensurePesuCredentialsConfigured();
-    final payload = await _runDownloaderBridge([
-      'courses',
-      '--username',
-      _pesuUsername.trim(),
-      '--password',
-      _pesuPassword,
-    ]);
-    final coursesRaw = payload['courses'];
-    if (coursesRaw is! List) {
-      return const [];
-    }
-    return coursesRaw
-        .whereType<Map>()
-        .map((e) => e.cast<String, dynamic>())
-        .toList(growable: false);
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchPesuUnits({
-    required String courseId,
-  }) async {
-    _ensurePesuCredentialsConfigured();
-    final payload = await _runDownloaderBridge([
-      'units',
-      '--username',
-      _pesuUsername.trim(),
-      '--password',
-      _pesuPassword,
-      '--course-id',
-      courseId,
-    ]);
-    final unitsRaw = payload['units'];
-    if (unitsRaw is! List) {
-      return const [];
-    }
-    return unitsRaw
-        .whereType<Map>()
-        .map((e) => e.cast<String, dynamic>())
-        .toList(growable: false);
-  }
-
-  Future<String> _runPesuDownload({
-    required String courseId,
-    required String courseName,
-    required List<int> units,
-    required List<String> resourceIds,
-    required bool convert,
-    required bool merge,
-    required bool dedup,
-    required bool cleanup,
-  }) async {
-    _ensurePesuCredentialsConfigured();
-    final safeCourse = _safeCourseFolderName(courseName);
-    final outputDir =
-        '$_downloaderDownloadsPath${Platform.pathSeparator}$safeCourse';
-    final payload = await _runDownloaderBridge([
-      'download',
-      '--username',
-      _pesuUsername.trim(),
-      '--password',
-      _pesuPassword,
-      '--course-id',
-      courseId,
-      '--course-name',
-      courseName,
-      '--units',
-      units.join(','),
-      '--resources',
-      resourceIds.join(','),
-      '--output-dir',
-      outputDir,
-      if (convert) '--convert',
-      if (merge) '--merge',
-      if (dedup) '--dedup',
-      if (cleanup) '--cleanup',
-    ]);
-    final pdfCount = (payload['pdfCount'] as num?)?.toInt() ?? 0;
-    final baseDir = payload['baseDir']?.toString() ?? outputDir;
-    return 'Download complete. PDFs: $pdfCount\nSaved to: $baseDir';
-  }
-
-  Future<void> _importDownloaderPdfs() async {
-    final downloadsDir = Directory(_downloaderDownloadsPath);
-    if (!downloadsDir.existsSync()) {
-      throw Exception(
-        'No downloads folder found yet at $_downloaderDownloadsPath',
-      );
-    }
-    final pdfPaths = downloadsDir
-        .listSync(recursive: true)
-        .whereType<File>()
-        .map((f) => f.path)
-        .where((p) => p.toLowerCase().endsWith('.pdf'))
-        .toList(growable: false);
-    if (pdfPaths.isEmpty) {
-      throw Exception(
-        'No PDFs found in downloader output.\nExpected under $_downloaderDownloadsPath',
-      );
-    }
-
-    await _fileLibraryService.importPdfs(
-      sourceFilePaths: pdfPaths,
-      targetFolderRelativePath: _selectedFolderPath,
-    );
-    await _reloadLibrary();
-    if (mounted) {
-      setState(() {
-        _section = AppSection.home;
-      });
-    }
-  }
-
-  Future<void> _saveWorkspaceShortcuts() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'workspace.shortcuts',
-      WorkspaceShortcut.encodeList(_workspaceShortcuts),
-    );
-  }
-
-  Future<void> _saveTabColors() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'workspace.tabColors',
-      jsonEncode(_tabColorsByDocumentId),
-    );
-  }
-
-  Future<void> _saveLastReadPages() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'workspace.lastReadPages',
-      jsonEncode(_lastReadPageByDocumentId),
-    );
-  }
-
-  void _restoreViewportForActiveDocument() {
-    final active = _activeDocument;
-    final page = active == null
-        ? 1
-        : (_lastReadPageByDocumentId[active.id] ?? 1);
-    _viewport = PdfViewportData(currentPage: page, totalPages: 1, pageText: '');
-  }
-
-  PdfDocument _applyTabColor(PdfDocument doc) {
-    final value =
-        _tabColorsByDocumentId[doc.id] ?? _tabColorsByDocumentId[doc.path];
-    if (value == null) {
-      return doc.copyWith(clearTabColor: true);
-    }
-    return doc.copyWith(tabColorValue: value);
-  }
-
-  List<PdfDocument> _applyTabColors(List<PdfDocument> docs) {
-    return docs.map(_applyTabColor).toList(growable: false);
-  }
-
-  Future<bool> _createWorkspaceShortcut({
+  Future<bool> _createHomeShortcutWithFeedback({
     required String name,
     required List<String> tabIds,
     int? colorValue,
   }) async {
-    final normalizedName = name.trim().toLowerCase();
-    final duplicateByName = _workspaceShortcuts.any(
-      (s) => s.name.trim().toLowerCase() == normalizedName,
-    );
-    if (duplicateByName) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Workspace "$name" already exists on Home')),
-        );
-      }
-      return false;
-    }
-    final shortcut = WorkspaceShortcut(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+    final ok = await _workspace.createWorkspaceShortcut(
       name: name,
-      tabPaths: tabIds,
+      tabIds: tabIds,
       colorValue: colorValue,
     );
-    _workspaceShortcuts = [..._workspaceShortcuts, shortcut];
-    await _saveWorkspaceShortcuts();
-    if (mounted) {
-      setState(() {});
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Workspace "$name" already exists on Home')),
+      );
     }
-    return true;
+    return ok;
   }
 
-  Future<void> _openWorkspaceShortcut(WorkspaceShortcut shortcut) async {
-    final allDocs = await _fileLibraryService.getDocuments();
-    final coloredDocs = _applyTabColors(allDocs);
-    final byPath = <String, PdfDocument>{
-      for (final doc in coloredDocs) doc.path: doc,
-    };
-    final docs = shortcut.tabPaths
-        .map((path) => byPath[path])
-        .whereType<PdfDocument>()
-        .toList(growable: false);
-    if (docs.isEmpty) {
-      return;
-    }
-
-    final existingById = {for (final doc in _openTabs) doc.id: doc};
-    for (final doc in docs) {
-      existingById[doc.id] = doc;
-    }
-    _openTabs = existingById.values.toList(growable: false);
-    _activeTabId = docs.first.id;
-    _restoreViewportForActiveDocument();
-    _section = AppSection.workspace;
-    _shortcutLaunchNonce++;
-    _shortcutLaunchRequest = ShortcutLaunchRequest(
-      name: shortcut.name,
-      tabIds: docs.map((d) => d.id).toList(growable: false),
-      nonce: _shortcutLaunchNonce,
-      colorValue: shortcut.colorValue,
-    );
-    _refreshAnnotations();
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  Future<void> _deleteWorkspaceShortcutByName(String name) async {
-    _workspaceShortcuts = _workspaceShortcuts
-        .where((s) => s.name.trim().toLowerCase() != name.trim().toLowerCase())
-        .toList(growable: false);
-    if (_shortcutLaunchRequest != null &&
-        _shortcutLaunchRequest!.name.trim().toLowerCase() ==
-            name.trim().toLowerCase()) {
-      _shortcutLaunchRequest = null;
-    }
-    await _saveWorkspaceShortcuts();
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  void _consumeShortcutLaunch(int nonce) {
-    if (_shortcutLaunchRequest == null ||
-        _shortcutLaunchRequest!.nonce != nonce) {
-      return;
-    }
-    setState(() {
-      _shortcutLaunchRequest = null;
-    });
-  }
-
-  Future<bool> _renameWorkspaceShortcutByName(
-    String oldName,
-    String newName,
-  ) async {
-    final oldNorm = oldName.trim().toLowerCase();
-    final newNorm = newName.trim().toLowerCase();
-    if (oldNorm == newNorm) {
-      return true;
-    }
-
-    final index = _workspaceShortcuts.indexWhere(
-      (s) => s.name.trim().toLowerCase() == oldNorm,
-    );
-    if (index == -1) {
-      return true;
-    }
-
-    final duplicate = _workspaceShortcuts.any(
-      (s) =>
-          s.name.trim().toLowerCase() == newNorm &&
-          s.name.trim().toLowerCase() != oldNorm,
-    );
-    if (duplicate) {
-      return false;
-    }
-
-    final current = _workspaceShortcuts[index];
-    _workspaceShortcuts[index] = WorkspaceShortcut(
-      id: current.id,
-      name: newName,
-      tabPaths: current.tabPaths,
-      colorValue: current.colorValue,
-    );
-    await _saveWorkspaceShortcuts();
-    if (mounted) {
-      setState(() {});
-    }
-    return true;
-  }
-
-  Future<void> _syncWorkspaceShortcutByName({
-    required String name,
-    required List<String> tabIds,
-    int? colorValue,
-  }) async {
-    final norm = name.trim().toLowerCase();
-    final index = _workspaceShortcuts.indexWhere(
-      (s) => s.name.trim().toLowerCase() == norm,
-    );
-    if (index == -1) {
-      return;
-    }
-    final current = _workspaceShortcuts[index];
-    _workspaceShortcuts[index] = WorkspaceShortcut(
-      id: current.id,
-      name: current.name,
-      tabPaths: tabIds,
-      colorValue: colorValue,
-    );
-    await _saveWorkspaceShortcuts();
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  Future<void> _reloadLibrary() async {
-    setState(() {
-      _loading = true;
-    });
-    final folders = await _fileLibraryService.getFolders();
-    final docs = await _fileLibraryService.getDocuments(
-      folderRelativePath: _selectedFolderPath,
-    );
-    setState(() {
-      _folders = folders;
-      _documents = _applyTabColors(docs);
-      _loading = false;
-    });
-  }
-
-  Future<void> _selectFolder(String folderPath) async {
-    _selectedFolderPath = folderPath;
-    await _reloadLibrary();
-  }
-
-  Future<void> _createFolder(String folderName, String parentPath) async {
-    await _fileLibraryService.createFolder(
-      name: folderName,
-      parentRelativePath: parentPath,
-    );
-    await _reloadLibrary();
-  }
-
-  Future<void> _importPdfs({String? targetFolderPath}) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf'],
-      allowMultiple: true,
-    );
-    final pickedPaths = result?.files
-        .map((f) => f.path)
-        .whereType<String>()
-        .toList(growable: false);
-    if (pickedPaths == null || pickedPaths.isEmpty) {
-      return;
-    }
-
-    await _fileLibraryService.importPdfs(
-      sourceFilePaths: pickedPaths,
-      targetFolderRelativePath: targetFolderPath ?? _selectedFolderPath,
-    );
-    await _reloadLibrary();
-  }
-
-  Future<void> _deleteDocument(PdfDocument document) async {
-    await _fileLibraryService.deleteDocument(document.path);
-    _tabColorsByDocumentId.remove(document.id);
-    _tabColorsByDocumentId.remove(document.path);
-    await _saveTabColors();
-    _lastReadPageByDocumentId.remove(document.id);
-    _lastReadPageByDocumentId.remove(document.path);
-    await _saveLastReadPages();
-    _openTabs = _openTabs.where((tab) => tab.id != document.id).toList();
-    if (_activeTabId == document.id) {
-      _activeTabId = _openTabs.isEmpty ? null : _openTabs.last.id;
-    }
-    await _reloadLibrary();
-    _refreshAnnotations();
-    await _broadcastAiState();
-    await _broadcastNotesState();
-  }
-
-  Future<void> _deleteFolder(String folderPath) async {
-    final normalized = folderPath.replaceAll('/', '\\').toLowerCase();
-    final absoluteFolderPath =
-        '\\${_libraryRoot.replaceAll('/', '\\').toLowerCase()}\\$normalized\\';
-    final tabColorKeysToDelete = _tabColorsByDocumentId.keys
-        .where(
-          (path) => '\\${path.replaceAll('/', '\\').toLowerCase()}\\'
-              .startsWith(absoluteFolderPath),
-        )
-        .toList(growable: false);
-    for (final key in tabColorKeysToDelete) {
-      _tabColorsByDocumentId.remove(key);
-    }
-    if (tabColorKeysToDelete.isNotEmpty) {
-      await _saveTabColors();
-    }
-    final pageKeysToDelete = _lastReadPageByDocumentId.keys
-        .where(
-          (path) => '\\${path.replaceAll('/', '\\').toLowerCase()}\\'
-              .startsWith(absoluteFolderPath),
-        )
-        .toList(growable: false);
-    for (final key in pageKeysToDelete) {
-      _lastReadPageByDocumentId.remove(key);
-    }
-    if (pageKeysToDelete.isNotEmpty) {
-      await _saveLastReadPages();
-    }
-    // Remove affected open tabs first so viewer file handles are released.
-    _openTabs = _openTabs
-        .where(
-          (tab) => !tab.folderPath
-              .replaceAll('/', '\\')
-              .toLowerCase()
-              .startsWith(normalized),
-        )
-        .toList(growable: true);
-    if (_openTabs.every((tab) => tab.id != _activeTabId)) {
-      _activeTabId = _openTabs.isEmpty ? null : _openTabs.last.id;
-    }
-    if (_selectedFolderPath.replaceAll('/', '\\').toLowerCase() == normalized) {
-      _selectedFolderPath = '';
-    }
-    if (mounted) {
-      setState(() {
-        _folders = _folders
-            .where(
-              (f) =>
-                  f.path.isEmpty ||
-                  !f.path
-                      .replaceAll('/', '\\')
-                      .toLowerCase()
-                      .startsWith(normalized),
-            )
-            .toList(growable: false);
-      });
-    }
-
-    // Give flutter/widgets one frame to detach viewers from soon-to-delete files.
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-
-    await _fileLibraryService.deleteFolder(folderPath);
-    await _reloadLibrary();
-    _refreshAnnotations();
-    await _broadcastAiState();
-    await _broadcastNotesState();
-  }
-
-  Future<bool> _createWorkspaceShortcutFromDocuments(
+  Future<bool> _createWorkspaceFromDocumentsWithFeedback(
     String name,
     List<PdfDocument> documents,
   ) async {
-    final ok = await _createWorkspaceShortcut(
-      name: name,
-      tabIds: documents.map((d) => d.path).toList(growable: false),
+    final ok = await _workspace.createWorkspaceShortcutFromDocuments(
+      name,
+      documents,
     );
-    if (!ok) {
-      return false;
-    }
-
-    final existingById = {for (final doc in _openTabs) doc.id: doc};
-    final coloredDocs = _applyTabColors(documents);
-    for (final doc in coloredDocs) {
-      existingById[doc.id] = doc;
-    }
-    _openTabs = existingById.values.toList(growable: false);
-    _activeTabId = coloredDocs.first.id;
-    _restoreViewportForActiveDocument();
-    _section = AppSection.workspace;
-    _shortcutLaunchNonce++;
-    _shortcutLaunchRequest = ShortcutLaunchRequest(
-      name: name,
-      tabIds: coloredDocs.map((d) => d.id).toList(growable: false),
-      nonce: _shortcutLaunchNonce,
-      colorValue: null,
-    );
-    _refreshAnnotations();
-    if (mounted) {
-      setState(() {});
-    }
-    return true;
-  }
-
-  void _openDocument(PdfDocument document) {
-    final colored = _applyTabColor(document);
-    if (!_openTabs.any((tab) => tab.id == colored.id)) {
-      _openTabs = [..._openTabs, colored];
-    }
-    _activeTabId = colored.id;
-    _restoreViewportForActiveDocument();
-    _section = AppSection.workspace;
-    _refreshAnnotations();
-    _broadcastAiState();
-    _broadcastNotesState();
-    setState(() {});
-  }
-
-  void _openMergedNote(MergedNote note) {
-    final pseudoDoc = PdfDocument(
-      id: 'note-${note.id}',
-      path: 'note://${note.id}',
-      title: 'Notes: ${note.pdfTitle}',
-      lastOpened: DateTime.now(),
-    );
-    if (!_openTabs.any((tab) => tab.id == pseudoDoc.id)) {
-      _openTabs = [..._openTabs, pseudoDoc];
-    }
-    _activeTabId = pseudoDoc.id;
-    _restoreViewportForActiveDocument();
-    _section = AppSection.workspace;
-    setState(() {});
-  }
-
-  Future<void> _mergeNotesForTab(String documentId) async {
-    PdfDocument? doc;
-    for (final d in _documents) {
-      if (d.id == documentId) doc = d;
-    }
-    if (doc == null) {
-      for (final d in _openTabs) {
-        if (d.id == documentId) doc = d;
-      }
-    }
-    if (doc == null) return;
-    
-    final notes = await _richNotesStore.getNotesForPdf(documentId);
-    final buffer = StringBuffer();
-    buffer.writeln('# Notes for ${doc.title}\n');
-    
-    if (notes.isEmpty) {
-      buffer.writeln('No notes have been added to this document yet.');
-    } else {
-      buffer.writeln('## Agenda');
-      for (final note in notes) {
-        buffer.writeln('- [Page ${note.pageNumber}](#page-${note.pageNumber})');
-      }
-      buffer.writeln('\n---');
-      
-      for (final note in notes) {
-        buffer.writeln('\n## Page ${note.pageNumber}');
-        buffer.writeln(_deltaJsonToPlainText(note.deltaJson));
-      }
-    }
-    
-    final existing = _mergedNotesStore.getNoteByPdfId(documentId);
-    final merged = MergedNote(
-      id: existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      pdfId: documentId,
-      pdfTitle: doc.title,
-      markdownContent: buffer.toString(),
-      createdAt: existing?.createdAt ?? DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-    
-    await _mergedNotesStore.saveNote(merged);
-    _openMergedNote(merged);
-  }
-
-  Future<void> _mergeNotesForGroup(String groupName, List<String> tabIds) async {
-    final buffer = StringBuffer();
-    buffer.writeln('# Master Notes for $groupName\n');
-    
-    // First pass to build master agenda
-    buffer.writeln('## Master Agenda');
-    for (final tabId in tabIds) {
-      PdfDocument? doc;
-      for (final d in _documents) {
-        if (d.id == tabId) doc = d;
-      }
-      if (doc == null) {
-        for (final d in _openTabs) {
-          if (d.id == tabId) doc = d;
-        }
-      }
-      if (doc == null) continue;
-
-      final notes = await _richNotesStore.getNotesForPdf(doc.id);
-      if (notes.isEmpty) continue;
-
-      final docTitleEncoded = Uri.encodeComponent(doc.title);
-      buffer.writeln('- [${doc.title}](#doc=$docTitleEncoded)');
-      
-      for (final note in notes) {
-        buffer.writeln('  - [Page ${note.pageNumber}](#doc=$docTitleEncoded&page=${note.pageNumber})');
-      }
-    }
-    buffer.writeln('\n---\n');
-
-    // Second pass to write content
-    bool hasAnyNotes = false;
-    for (final tabId in tabIds) {
-      PdfDocument? doc;
-      for (final d in _documents) {
-        if (d.id == tabId) doc = d;
-      }
-      if (doc == null) {
-        for (final d in _openTabs) {
-          if (d.id == tabId) doc = d;
-        }
-      }
-      if (doc == null) continue;
-
-      final notes = await _richNotesStore.getNotesForPdf(doc.id);
-      if (notes.isEmpty) continue;
-
-      hasAnyNotes = true;
-      buffer.writeln('## ${doc.title}');
-      
-      for (final note in notes) {
-        buffer.writeln('\n### Page ${note.pageNumber}');
-        buffer.writeln(_deltaJsonToPlainText(note.deltaJson));
-      }
-      buffer.writeln('\n---\n');
-    }
-
-    if (!hasAnyNotes) {
-      buffer.writeln('No notes have been added to any documents in this workspace yet.');
-    }
-
-    // Using the group name mapped into an ID string to ensure replacement
-    final pseudoNoteId = 'group-${groupName.replaceAll(RegExp(r'\s+'), '_')}';
-    final existing = _mergedNotesStore.getNoteById(pseudoNoteId);
-    
-    final merged = MergedNote(
-      id: pseudoNoteId,
-      pdfId: 'group', // Re-use pdfId to store a marker for group
-      pdfTitle: 'Master: $groupName',
-      markdownContent: buffer.toString(),
-      createdAt: existing?.createdAt ?? DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-    
-    await _mergedNotesStore.saveNote(merged);
-    _openMergedNote(merged);
-  }
-
-  Future<void> _saveMergedNote(String text) async {
-    final activeDoc = _activeDocument;
-    if (activeDoc == null || !activeDoc.id.startsWith('note-')) return;
-    
-    final noteId = activeDoc.id.substring(5);
-    final existing = _mergedNotesStore.getNoteById(noteId);
-    if (existing != null) {
-      final updated = existing.copyWith(
-        markdownContent: text,
-        updatedAt: DateTime.now(),
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Workspace "$name" already exists on Home')),
       );
-      await _mergedNotesStore.saveNote(updated);
-
-      // Two-way sync: Update page notes in RichNotesStore
-      await _syncMarkdownToRichNotes(text);
-
-      setState(() {});
     }
+    return ok;
   }
 
-  Future<void> _syncMarkdownToRichNotes(String markdown) async {
-    final lines = markdown.split('\n');
-    String? currentPdfId;
-    int? currentPage;
-    final StringBuffer currentText = StringBuffer();
-
-    Future<void> saveCurrentBuffer() async {
-      final docId = currentPdfId;
-      final page = currentPage;
-      if (docId != null && page != null && currentText.isNotEmpty) {
-        final content = currentText.toString().trim();
-        if (content.isNotEmpty) {
-           await _richNotesStore.upsertNote(
-             pdfId: docId,
-             pageNumber: page,
-             deltaJson: _toPlainTextDeltaJson(content),
-           );
-        }
-      }
-      currentText.clear();
-    }
-
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      if (line.startsWith('## ') && !line.startsWith('### ') && !line.startsWith('## Agenda') && !line.startsWith('## Master')) {
-        // Discovered a document title
-        await saveCurrentBuffer();
-        currentPage = null;
-        
-        final title = line.substring(3).trim();
-        PdfDocument? targetDoc;
-        for (final doc in _documents) {
-          if (doc.title == title) targetDoc = doc;
-        }
-        if (targetDoc == null) {
-          for (final doc in _openTabs) {
-             if (doc.title == title) targetDoc = doc;
-          }
-        }
-        currentPdfId = targetDoc?.id;
-      } else if (line.startsWith('### Page ') && currentPdfId != null) {
-        // Discovered a page header
-        await saveCurrentBuffer();
-        final numStr = line.substring(9).trim();
-        final parsed = int.tryParse(numStr);
-        if (parsed != null) {
-          currentPage = parsed;
-        } else {
-          currentPage = null;
-        }
-      } else if (currentPage != null && currentPdfId != null) {
-        // Accumulate page content, ignoring divider dashes 
-        if (line.trim() != '---') {
-           currentText.writeln(line);
-        }
-      }
-    }
-    
-    // Save trailing buffer
-    await saveCurrentBuffer();
-    _refreshAnnotations(); 
-    _broadcastNotesState();
+  Future<void> _updateThemeMode(ThemeMode mode) async {
+    await _workspace.updateThemeMode(mode, widget.onThemeModeChanged);
   }
 
-  Future<void> _renameMergedNote(String noteId, String newTitle) async {
-    final existing = _mergedNotesStore.getNoteById(noteId);
-    if (existing != null) {
-      final updated = existing.copyWith(
-        pdfTitle: newTitle,
-        updatedAt: DateTime.now(),
-      );
-      await _mergedNotesStore.saveNote(updated);
-
-      final tabId = 'note-$noteId';
-      _openTabs = _openTabs.map((t) {
-        if (t.id == tabId) {
-          return t.copyWith(title: 'Notes: $newTitle');
-        }
-        return t;
-      }).toList(growable: false);
-      setState(() {});
-    }
-  }
-
-  void _closeTab(String documentId) {
-    _openTabs = _openTabs.where((tab) => tab.id != documentId).toList();
-    if (_activeTabId == documentId) {
-      _activeTabId = _openTabs.isEmpty ? null : _openTabs.last.id;
-      _restoreViewportForActiveDocument();
-    }
-    _refreshAnnotations();
-    _broadcastAiState();
-    _broadcastNotesState();
-    setState(() {});
-  }
-
-  void _switchTab(String documentId) {
-    _activeTabId = documentId;
-    _restoreViewportForActiveDocument();
-    _refreshAnnotations();
-    _broadcastAiState();
-    _broadcastNotesState();
-    setState(() {});
-  }
-
-  Future<void> _setTabColor(String documentId, int? colorValue) async {
-    if (colorValue == null) {
-      _tabColorsByDocumentId.remove(documentId);
-    } else {
-      _tabColorsByDocumentId[documentId] = colorValue;
-    }
-    await _saveTabColors();
-
-    if (mounted) {
-      setState(() {
-        _documents = _documents
-            .map(
-              (d) => d.id == documentId
-                  ? (colorValue == null
-                        ? d.copyWith(clearTabColor: true)
-                        : d.copyWith(tabColorValue: colorValue))
-                  : d,
-            )
-            .toList(growable: false);
-        _openTabs = _openTabs
-            .map(
-              (d) => d.id == documentId
-                  ? (colorValue == null
-                        ? d.copyWith(clearTabColor: true)
-                        : d.copyWith(tabColorValue: colorValue))
-                  : d,
-            )
-            .toList(growable: false);
-      });
-    }
-  }
-
-  void _onViewportChanged(PdfViewportData viewportData) {
-    _viewport = viewportData;
-    final active = _activeDocument;
-    if (active != null) {
-      final previous = _lastReadPageByDocumentId[active.id];
-      if (previous != viewportData.currentPage) {
-        _lastReadPageByDocumentId[active.id] = viewportData.currentPage;
-        _saveLastReadPages();
-      }
-    }
-    _refreshAnnotations();
-    _broadcastAiState();
-    _broadcastNotesState();
-    setState(() {});
-  }
-
-  Future<String> _runAssistant({
-    required String providerId,
-    required String prompt,
-  }) async {
-    final active = _activeDocument;
-    try {
-      if (providerId != _activeAiProviderId) {
-        _activeAiProviderId = providerId;
-      }
-      final currentPage = _viewport.currentPage;
-      final currentPageText = _viewport.pageText.trim();
-      String ragContext =
-          '[Current page p$currentPage]\n${currentPageText.isEmpty ? '(No text extracted for this page.)' : currentPageText}';
-      String citationHint = '';
-      String webContextBlock = '';
-      bool webUsed = false;
-      if (_crossDocRagEnabled && _openTabs.isNotEmpty) {
-        final pageAnchoredQuery = '$prompt\n\n$currentPageText';
-        final futures = _openTabs.map((tab) => _ragService.buildContext(
-              pdfPath: tab.path,
-              query: pageAnchoredQuery,
-              topK: 3, // slightly fewer per-doc since we're merging many
-            ));
-        final results = await Future.wait(futures);
-        
-        // Merge and re-rank all retrieved chunks globally
-        for (int i = 0; i < _openTabs.length; i++) {
-          final tab = _openTabs[i];
-          final res = results[i];
-          // We hackily extract the chunks and scores from the formatted string,
-          // or we can just append them all with Doc markers. The RAG service
-          // returns a block string. Let's just combine the result strings for now,
-          // prepending the document title.
-          if (res.context.trim().isNotEmpty) {
-            final docContext = res.context
-                .split('\n\n---\n\n')
-                .where((c) => c.trim().isNotEmpty)
-                .map((c) => '[Doc: ${tab.title}] $c')
-                .join('\n\n---\n\n');
-            ragContext = '$ragContext\n\n---\n\n$docContext';
-          }
-        }
-        citationHint =
-            '\nCurrent page is p$currentPage. You have cross-document RAG enabled. Citations include [Doc: title] [Page N]. Always prioritize current page unless user explicitly asks for other pages.';
-      } else if (active != null) {
-        final pageAnchoredQuery = '$prompt\n\n$currentPageText';
-        final rag = await _ragService.buildContext(
-          pdfPath: active.path,
-          query: pageAnchoredQuery,
-          topK: 5,
-        );
-        final secondaryPages = rag.pages
-            .where((p) => p != currentPage)
-            .toList(growable: false);
-        if (rag.context.trim().isNotEmpty) {
-          ragContext =
-              '$ragContext\n\n---\n\n[Secondary supporting context]\n${rag.context}';
-        }
-        if (secondaryPages.isNotEmpty) {
-          citationHint =
-              '\nCurrent page is p$currentPage. Secondary retrieved pages: ${secondaryPages.join(', ')}. Always prioritize current page unless user explicitly asks for other pages.';
-        }
-      }
-
-      if (_webSearchEnabled &&
-          _googleSearchApiKey.trim().isNotEmpty &&
-          _googleSearchCx.trim().isNotEmpty) {
-        final searchQuery = active == null
-            ? prompt
-            : '${active.title} ${prompt.trim()}';
-        final web = await _googleSearchService.search(
-          query: searchQuery,
-          apiKey: _googleSearchApiKey,
-          searchEngineId: _googleSearchCx,
-          maxResults: 3,
-        );
-        if (web.context.trim().isNotEmpty) {
-          webUsed = true;
-          webContextBlock =
-              '\n\n[Web search snippets]\n${web.context}\n\nSources:\n${web.sources.join('\n')}';
-          citationHint =
-              '$citationHint\nWeb snippets are available; use them for missing definitions and cite as [web1], [web2], etc.';
-        }
-      }
-
-      final combinedContext = '$ragContext$webContextBlock';
-
-      final guidedPrompt =
-          '''
-$prompt
-
-You are answering about the CURRENTLY VISIBLE PDF PAGE: p$currentPage.
-Use "[Current page p$currentPage]" as primary source of truth.
-Use secondary context only for support.
-Use web snippets only to fill missing definitions or background.
-If there is a conflict, trust current page.
-If current page context is insufficient, say exactly what is missing.
-If web snippets are present, cite them as [web1], [web2], etc.
-$citationHint
-''';
-
-      final provider = _providerRegistry.resolve(providerId);
-      final response = await provider.sendPrompt(
-        prompt: guidedPrompt,
-        context: combinedContext,
-        apiKey: switch (providerId) {
-          'openai' => _openAiApiKey,
-          'groq' => _groqApiKey,
-          'gemini' => _geminiApiKey,
-          _ => null,
-        },
-      );
-      _assistantOutput = response;
-      await _broadcastAiState();
-      setState(() {});
-      if (_webSearchEnabled &&
-          _googleSearchApiKey.trim().isNotEmpty &&
-          _googleSearchCx.trim().isNotEmpty &&
-          !webUsed) {
-        return '$response\n\n_Note: Web fallback is enabled but no web snippets were retrieved for this query._';
-      }
-      return response;
-    } catch (e) {
-      _assistantOutput = 'AI request failed:\n${e.toString()}';
-      await _broadcastAiState();
-      setState(() {});
-      return _assistantOutput;
-    }
-  }
-
-  Future<void> _openExternalAiWindow() async {
-    final active = _activeDocument;
-    if (active == null) {
-      return;
-    }
-    final payload = jsonEncode({
-      'panel': 'ai',
-      'documentId': active.id,
-      'documentTitle': active.title,
-      'pageNumber': _viewport.currentPage,
-      'pageText': _viewport.pageText,
-      'assistantOutput': _assistantOutput,
-      'themeMode': _themeModeToString(_themeMode),
-      'activeAiProviderId': _activeAiProviderId,
-      'apiKeys': {
-        'openai': _openAiApiKey,
-        'groq': _groqApiKey,
-        'gemini': _geminiApiKey,
-      },
-    });
-
-    final window = await DesktopMultiWindow.createWindow(payload);
-    _externalAiWindowIds.add(window.windowId);
-    window
-      ..setFrame(const Offset(120, 120) & const Size(520, 760))
-      ..setTitle('StudyPDF - AI Assistant')
-      ..show();
-  }
-
-  Future<void> _openExternalNotesWindow() async {
-    final active = _activeDocument;
-    if (active == null) {
-      return;
-    }
-    final payload = jsonEncode({
-      'panel': 'notes',
-      'documentId': active.id,
-      'documentTitle': active.title,
-      'pageNumber': _viewport.currentPage,
-      'annotations': _pageAnnotations
-          .map(
-            (a) => {
-              'id': a.id,
-              'pdfId': a.pdfId,
-              'pageNumber': a.pageNumber,
-              'content': a.content,
-              'createdAt': a.createdAt.toIso8601String(),
-            },
-          )
-          .toList(),
-    });
-
-    final window = await DesktopMultiWindow.createWindow(payload);
-    _externalNotesWindowIds.add(window.windowId);
-    window
-      ..setFrame(const Offset(180, 180) & const Size(700, 760))
-      ..setTitle('StudyPDF - Notes')
-      ..show();
-  }
-
-  void _saveAnnotation(String text) async {
-    final activeDocument = _activeDocument;
-    if (activeDocument == null || text.trim().isEmpty) {
-      return;
-    }
-    final trimmed = text.trim();
-
-    _store.upsertAnnotation(
-      Annotation(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        pdfId: activeDocument.id,
-        pageNumber: _viewport.currentPage,
-        content: trimmed,
-        createdAt: DateTime.now(),
-      ),
-    );
-    await _richNotesStore.upsertNote(
-      pdfId: activeDocument.id,
-      pageNumber: _viewport.currentPage,
-      deltaJson: _toPlainTextDeltaJson(trimmed),
-    );
-
-    _refreshAnnotations();
-    _broadcastNotesState();
-    setState(() {});
-  }
-
-  String _toPlainTextDeltaJson(String text) {
-    final normalized = text.endsWith('\n') ? text : '$text\n';
-    return jsonEncode([
-      {'insert': normalized},
-    ]);
-  }
-
-  String _deltaJsonToPlainText(String deltaJson) {
-    try {
-      final decoded = jsonDecode(deltaJson);
-      if (decoded is! List) {
-        return deltaJson;
-      }
-      final buffer = StringBuffer();
-      for (final op in decoded) {
-        if (op is Map && op['insert'] is String) {
-          buffer.write(op['insert'] as String);
-        }
-      }
-      return buffer.toString().trim();
-    } catch (_) {
-      return deltaJson;
-    }
-  }
-
-  void _refreshAnnotations() {
-    final activeDocument = _activeDocument;
-    if (activeDocument == null) {
-      _pageAnnotations = const [];
-      return;
-    }
-    final rich = _richNotesStore.peekNote(
-      pdfId: activeDocument.id,
-      pageNumber: _viewport.currentPage,
-    );
-    if (rich != null && rich.deltaJson.trim().isNotEmpty) {
-      _pageAnnotations = <Annotation>[
-        Annotation(
-          id: rich.id,
-          pdfId: activeDocument.id,
-          pageNumber: _viewport.currentPage,
-          content: _deltaJsonToPlainText(rich.deltaJson),
-          createdAt: rich.updatedAt,
-        ),
-      ];
-      _store.upsertAnnotation(_pageAnnotations.first);
-      return;
-    }
-    _pageAnnotations = _store.getAnnotations(
-      pdfId: activeDocument.id,
-      page: _viewport.currentPage,
-    );
-  }
-
-  List<Map<String, dynamic>> _serializedAnnotations() {
-    return _pageAnnotations
-        .map(
-          (a) => {
-            'id': a.id,
-            'pdfId': a.pdfId,
-            'pageNumber': a.pageNumber,
-            'content': a.content,
-            'createdAt': a.createdAt.toIso8601String(),
-          },
-        )
-        .toList(growable: false);
-  }
-
-  Future<void> _broadcastAiState() async {
-    for (final id in _externalAiWindowIds.toList(growable: false)) {
-      await _pushAiStateToWindow(id);
-    }
-  }
-
-  Future<void> _broadcastNotesState() async {
-    for (final id in _externalNotesWindowIds.toList(growable: false)) {
-      await _pushNotesStateToWindow(id);
-    }
-  }
-
-  Future<void> _pushAiStateToWindow(int id) async {
-    try {
-      await DesktopMultiWindow.invokeMethod(id, 'mainStateUpdated', {
-        'panel': 'ai',
-        'documentId': _activeDocument?.id,
-        'documentTitle': _activeDocument?.title,
-        'pageNumber': _viewport.currentPage,
-        'pageText': _viewport.pageText,
-        'assistantOutput': _assistantOutput,
-        'themeMode': _themeModeToString(_themeMode),
-        'activeAiProviderId': _activeAiProviderId,
-        'apiKeys': {
-          'openai': _openAiApiKey,
-          'groq': _groqApiKey,
-          'gemini': _geminiApiKey,
-        },
-      });
-    } catch (_) {
-      _externalAiWindowIds.remove(id);
-    }
-  }
-
-  Future<void> _pushNotesStateToWindow(int id) async {
-    try {
-      await DesktopMultiWindow.invokeMethod(id, 'mainStateUpdated', {
-        'panel': 'notes',
-        'documentId': _activeDocument?.id,
-        'documentTitle': _activeDocument?.title,
-        'pageNumber': _viewport.currentPage,
-        'annotations': _serializedAnnotations(),
-      });
-    } catch (_) {
-      _externalNotesWindowIds.remove(id);
-    }
+  Future<void> _importDownloaderPdfs() async {
+    await _workspace.importDownloaderPdfs(_ai.downloaderDownloadsPath);
   }
 
   @override
   Widget build(BuildContext context) {
-    final filteredDocs = _documents
+    return AnimatedBuilder(
+      animation: Listenable.merge([_workspace, _ai]),
+      builder: (context, _) => _buildShell(context),
+    );
+  }
+
+  Widget _buildShell(BuildContext context) {
+    final filteredDocs = _workspace.documents
         .where(
           (doc) => _query.trim().isEmpty
               ? true
               : doc.title.toLowerCase().contains(_query.toLowerCase()),
         )
         .toList(growable: false);
-    final recentDocs = List<PdfDocument>.from(_documents)
+    final recentDocs = List<PdfDocument>.from(_workspace.documents)
       ..sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+
+    // The PESU downloader is an opt-in module (Phase 4b) — most users
+    // aren't PESU students, so its nav destination and page only exist in
+    // the tree at all once enabled in Settings. Because AppSection.index
+    // is no longer a reliable position once an entry can be missing, the
+    // visible sections are tracked as their own list and selection is
+    // resolved against *that* list rather than the raw enum index.
+    final enablePesu = _workspace.workspacePreferences.enablePesuDownloader;
+    final visibleSections = <AppSection>[
+      AppSection.home,
+      AppSection.workspace,
+      if (enablePesu) AppSection.downloader,
+      AppSection.notes,
+      AppSection.settings,
+    ];
+    var selectedSectionIndex = visibleSections.indexOf(_workspace.section);
+    if (selectedSectionIndex < 0) {
+      selectedSectionIndex = 0;
+    }
 
     return Shortcuts(
       shortcuts: <LogicalKeySet, Intent>{
@@ -1841,22 +216,23 @@ $citationHint
         actions: <Type, Action<Intent>>{
           OpenFileIntent: CallbackAction<OpenFileIntent>(
             onInvoke: (_) {
-              _importPdfs(targetFolderPath: _selectedFolderPath);
+              _workspace.importPdfs(
+                targetFolderPath: _workspace.selectedFolderPath,
+              );
               return null;
             },
           ),
           NewTabIntent: CallbackAction<NewTabIntent>(
             onInvoke: (_) {
-              setState(() {
-                _section = AppSection.home;
-              });
+              _workspace.section = AppSection.home;
+              _workspace.notifyChanged();
               return null;
             },
           ),
           ExplainPageIntent: CallbackAction<ExplainPageIntent>(
             onInvoke: (_) {
-              _runAssistant(
-                providerId: _activeAiProviderId,
+              _ai.runAssistant(
+                providerId: _ai.activeAiProviderId,
                 prompt: 'Explain this page',
               );
               return null;
@@ -1889,9 +265,8 @@ $citationHint
               IconButton(
                 tooltip: 'Open Home',
                 onPressed: () {
-                  setState(() {
-                    _section = AppSection.home;
-                  });
+                  _workspace.section = AppSection.home;
+                  _workspace.notifyChanged();
                 },
                 icon: const Icon(Icons.home_outlined),
               ),
@@ -1901,142 +276,212 @@ $citationHint
           body: Row(
             children: [
               NavigationRail(
-                selectedIndex: _section.index,
+                selectedIndex: selectedSectionIndex,
+                labelType: NavigationRailLabelType.all,
                 onDestinationSelected: (index) {
-                  setState(() {
-                    _section = AppSection.values[index];
-                  });
+                  _workspace.section = visibleSections[index];
+                  _workspace.notifyChanged();
                 },
-                destinations: const [
-                  NavigationRailDestination(
-                    icon: Icon(Icons.folder_open_outlined),
+                destinations: [
+                  const NavigationRailDestination(
+                    icon: Tooltip(
+                      message: 'Home — document library',
+                      child: Icon(Icons.folder_open_outlined),
+                    ),
+                    selectedIcon: Tooltip(
+                      message: 'Home — document library',
+                      child: Icon(Icons.folder_open),
+                    ),
                     label: Text('Home'),
                   ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.picture_as_pdf_outlined),
+                  const NavigationRailDestination(
+                    icon: Tooltip(
+                      message: 'Workspace — open PDFs and notes',
+                      child: Icon(Icons.picture_as_pdf_outlined),
+                    ),
+                    selectedIcon: Tooltip(
+                      message: 'Workspace — open PDFs and notes',
+                      child: Icon(Icons.picture_as_pdf),
+                    ),
                     label: Text('Workspace'),
                   ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.download_outlined),
-                    label: Text('Downloads'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.edit_document),
+                  if (enablePesu)
+                    const NavigationRailDestination(
+                      icon: Tooltip(
+                        message: 'Downloads — PESU course downloader',
+                        child: Icon(Icons.download_outlined),
+                      ),
+                      label: Text('Downloads'),
+                    ),
+                  const NavigationRailDestination(
+                    icon: Tooltip(
+                      message: 'Notes — merged notes library',
+                      child: Icon(Icons.edit_document),
+                    ),
                     label: Text('Notes'),
                   ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.settings_outlined),
+                  const NavigationRailDestination(
+                    icon: Tooltip(
+                      message: 'Settings — workspace and AI preferences',
+                      child: Icon(Icons.settings_outlined),
+                    ),
                     label: Text('Settings'),
                   ),
                 ],
               ),
               const VerticalDivider(width: 1),
               Expanded(
-                child: _loading
+                child: _workspace.loading
                     ? const Center(child: CircularProgressIndicator())
                     : IndexedStack(
-                        index: _section.index,
+                        index: selectedSectionIndex,
                         children: [
                           DocumentLibraryPage(
                             documents: filteredDocs,
                             recentDocuments: recentDocs.take(5).toList(),
-                            folders: _folders,
-                            shortcuts: _workspaceShortcuts,
-                            selectedFolderPath: _selectedFolderPath,
-                            libraryRoot: _libraryRoot,
-                            onSelectFolder: _selectFolder,
-                            onCreateFolder: _createFolder,
-                            onImportPdf: (targetFolder) =>
-                                _importPdfs(targetFolderPath: targetFolder),
-                            onDeleteDocument: _deleteDocument,
-                            onDeleteFolder: _deleteFolder,
-                            onOpenDocument: _openDocument,
-                            onOpenShortcut: _openWorkspaceShortcut,
+                            folders: _workspace.folders,
+                            shortcuts: _workspace.workspaceShortcuts,
+                            selectedFolderPath: _workspace.selectedFolderPath,
+                            libraryRoot: _workspace.libraryRoot,
+                            onSelectFolder: _workspace.selectFolder,
+                            onCreateFolder: _workspace.createFolder,
+                            onImportPdf: (targetFolder) => _workspace
+                                .importPdfs(targetFolderPath: targetFolder),
+                            onDeleteDocument: _workspace.deleteDocument,
+                            onDeleteFolder: _workspace.deleteFolder,
+                            onOpenDocument: _workspace.openDocument,
+                            onOpenShortcut: _workspace.openWorkspaceShortcut,
+                            onDeleteShortcut: (shortcut) => _workspace
+                                .deleteWorkspaceShortcutByName(shortcut.name),
                             onCreateWorkspaceFromDocuments:
-                                _createWorkspaceShortcutFromDocuments,
+                                _createWorkspaceFromDocumentsWithFeedback,
                           ),
                           StudyWorkspacePage(
-                            openTabs: _openTabs,
-                            activeTabId: _activeTabId,
-                            activeMergedNote: _activeDocument?.id.startsWith('note-') == true ? _mergedNotesStore.getNoteById(_activeDocument!.id.substring(5)) : null,
-                            viewportData: _viewport,
-                            pageAnnotations: _pageAnnotations,
-                            assistantOutput: _assistantOutput,
-                            providers: _providerRegistry.all,
-                            onTabSelected: _switchTab,
-                            onCloseTab: _closeTab,
-                            onTabColorChanged: _setTabColor,
-                            onViewportChanged: _onViewportChanged,
-                            onRunPrompt: _runAssistant,
-                            onSaveNote: _saveAnnotation,
-                            onMergeNotes: _mergeNotesForTab,
-                            onMergeGroupNotes: _mergeNotesForGroup,
-                            onSaveMergedNote: _saveMergedNote,
-                            onRenameMergedNote: _renameMergedNote,
-                            activeDocument: _activeDocument,
-                            onOpenExternalAiWindow: _openExternalAiWindow,
-                            onOpenExternalNotesWindow: _openExternalNotesWindow,
+                            openTabs: _workspace.openTabs,
+                            activeTabId: _workspace.activeTabId,
+                            activeMergedNote:
+                                _workspace.activeDocument?.id.startsWith(
+                                      'note-',
+                                    ) ==
+                                    true
+                                ? _workspace.mergedNotesStore.getNoteById(
+                                    _workspace.activeDocument!.id.substring(5),
+                                  )
+                                : null,
+                            viewportData: _workspace.viewport,
+                            pageAnnotations: _workspace.pageAnnotations,
+                            assistantOutput: _ai.assistantOutput,
+                            providers: _ai.providerRegistry.all,
+                            onTabSelected: _workspace.switchTab,
+                            onCloseTab: _workspace.closeTab,
+                            onTabColorChanged: _workspace.setTabColor,
+                            onViewportChanged: _workspace.onViewportChanged,
+                            onRunPrompt: _ai.runAssistant,
+                            onSaveNote: _workspace.saveAnnotation,
+                            onMergeNotes: _workspace.mergeNotesForTab,
+                            onMergeGroupNotes: _workspace.mergeNotesForGroup,
+                            onSaveMergedNote: _workspace.saveMergedNote,
+                            onRenameMergedNote: _workspace.renameMergedNote,
+                            onTranscribeHandwriting: (bytes, mimeType) =>
+                                _ai.transcribeHandwriting(
+                                  imageBytes: bytes,
+                                  mimeType: mimeType,
+                                ),
+                            onSaveNoteImage: (bytes, extension) =>
+                                _workspace.saveNoteImage(
+                                  bytes: bytes,
+                                  extension: extension,
+                                ),
+                            activeDocument: _workspace.activeDocument,
+                            onOpenExternalAiWindow:
+                                _window.openExternalAiWindow,
+                            onOpenExternalNotesWindow:
+                                _window.openExternalNotesWindow,
                             aiDockPosition:
-                                _workspacePreferences.aiDockPosition,
-                            notesDockPosition:
-                                _workspacePreferences.notesDockPosition,
-                            defaultAiVisible:
-                                _workspacePreferences.startWithAiVisible,
-                            defaultNotesVisible:
-                                _workspacePreferences.startWithNotesVisible,
-                            bottomPanelSpansEntireWidth:
-                                _workspacePreferences.bottomPanelSpansEntireWidth,
-                            activeAiProviderId: _activeAiProviderId,
-                            onAiProviderChanged: _handleAiProviderChanged,
-                            onCreateHomeShortcut: _createWorkspaceShortcut,
+                                _workspace.workspacePreferences.aiDockPosition,
+                            notesDockPosition: _workspace
+                                .workspacePreferences
+                                .notesDockPosition,
+                            defaultAiVisible: _workspace
+                                .workspacePreferences
+                                .startWithAiVisible,
+                            defaultNotesVisible: _workspace
+                                .workspacePreferences
+                                .startWithNotesVisible,
+                            bottomPanelSpansEntireWidth: _workspace
+                                .workspacePreferences
+                                .bottomPanelSpansEntireWidth,
+                            activeAiProviderId: _ai.activeAiProviderId,
+                            onAiProviderChanged: _ai.handleAiProviderChanged,
+                            onCreateHomeShortcut:
+                                _createHomeShortcutWithFeedback,
                             onDeleteHomeShortcutByName:
-                                _deleteWorkspaceShortcutByName,
+                                _workspace.deleteWorkspaceShortcutByName,
                             onRenameHomeShortcutByName:
-                                _renameWorkspaceShortcutByName,
+                                _workspace.renameWorkspaceShortcutByName,
                             onSyncHomeShortcutByName:
-                                _syncWorkspaceShortcutByName,
-                            shortcutLaunchRequest: _shortcutLaunchRequest,
-                            onShortcutLaunchConsumed: _consumeShortcutLaunch,
+                                _workspace.syncWorkspaceShortcutByName,
+                            shortcutLaunchRequest:
+                                _workspace.shortcutLaunchRequest,
+                            onShortcutLaunchConsumed:
+                                _workspace.consumeShortcutLaunch,
+                            codeExecutionBackend:
+                                _workspace.codeExecutionBackend,
+                            onCodeExecutionBackendChanged:
+                                _workspace.updateCodeExecutionBackend,
                           ),
-                          PesuDownloaderPage(
-                            downloadsPath: _downloaderDownloadsPath,
-                            credentialsConfigured:
-                                _pesuUsername.trim().isNotEmpty &&
-                                _pesuPassword.isNotEmpty,
-                            onSetupEnvironment: _runDownloaderSetup,
-                            onFetchCourses: _fetchPesuCourses,
-                            onFetchUnits: _fetchPesuUnits,
-                            onRunDownload: _runPesuDownload,
-                            onImportDownloads: _importDownloaderPdfs,
-                          ),
+                          if (enablePesu)
+                            PesuDownloaderPage(
+                              downloadsPath: _ai.downloaderDownloadsPath,
+                              credentialsConfigured:
+                                  _ai.pesuUsername.trim().isNotEmpty &&
+                                  _ai.pesuPassword.isNotEmpty,
+                              onSetupEnvironment: _ai.runDownloaderSetup,
+                              onFetchCourses: _ai.fetchPesuCourses,
+                              onFetchUnits: _ai.fetchPesuUnits,
+                              onRunDownload: _ai.runPesuDownload,
+                              onImportDownloads: _importDownloaderPdfs,
+                            ),
                           MergedNotesLibraryPage(
-                            store: _mergedNotesStore,
-                            onOpenNote: _openMergedNote,
+                            store: _workspace.mergedNotesStore,
+                            onOpenNote: _workspace.openMergedNote,
                           ),
                           WorkspaceSettingsPage(
-                            preferences: _workspacePreferences,
-                            onChanged: _updateWorkspacePreferences,
-                            themeMode: _themeMode,
+                            preferences: _workspace.workspacePreferences,
+                            onChanged: _workspace.updateWorkspacePreferences,
+                            themeMode: _workspace.themeMode,
                             onThemeModeChanged: _updateThemeMode,
-                            libraryRoot: _libraryRoot,
-                            onChangeLibraryRoot: _changeLibraryRoot,
-                            openAiApiKey: _openAiApiKey,
-                            groqApiKey: _groqApiKey,
-                            geminiApiKey: _geminiApiKey,
-                            onApiKeyChanged: _updateApiKey,
-                            webSearchEnabled: _webSearchEnabled,
-                            crossDocRagEnabled: _crossDocRagEnabled,
-                            onCrossDocRagChanged: _updateCrossDocRagEnabled,
-                            googleSearchApiKey: _googleSearchApiKey,
-                            googleSearchEngineId: _googleSearchCx,
+                            libraryRoot: _workspace.libraryRoot,
+                            onChangeLibraryRoot: _workspace.changeLibraryRoot,
+                            openAiApiKey: _ai.openAiApiKey,
+                            groqApiKey: _ai.groqApiKey,
+                            geminiApiKey: _ai.geminiApiKey,
+                            openRouterApiKey: _ai.openRouterApiKey,
+                            onApiKeyChanged: _ai.updateApiKey,
+                            openRouterModelId: _ai.openRouterModelId,
+                            openRouterFreeModels: _ai.openRouterFreeModels,
+                            openRouterFreeModelsLoading:
+                                _ai.openRouterFreeModelsLoading,
+                            onOpenRouterModelChanged: _ai.updateOpenRouterModel,
+                            onRefreshOpenRouterModels:
+                                _ai.loadOpenRouterFreeModels,
+                            webSearchEnabled: _ai.webSearchEnabled,
+                            crossDocRagEnabled: _ai.crossDocRagEnabled,
+                            onCrossDocRagChanged: _ai.updateCrossDocRagEnabled,
+                            googleSearchApiKey: _ai.googleSearchApiKey,
+                            googleSearchEngineId: _ai.googleSearchCx,
                             onWebSearchSettingsChanged:
-                                _updateWebSearchSettings,
-                            defaultAiProviderId: _defaultAiProviderId,
+                                _ai.updateWebSearchSettings,
+                            defaultAiProviderId: _ai.defaultAiProviderId,
                             onDefaultAiProviderChanged:
-                                _updateDefaultAiProvider,
-                            pesuUsername: _pesuUsername,
-                            pesuPassword: _pesuPassword,
-                            onPesuCredentialsChanged: _updatePesuCredentials,
+                                _ai.updateDefaultAiProvider,
+                            pesuUsername: _ai.pesuUsername,
+                            pesuPassword: _ai.pesuPassword,
+                            onPesuCredentialsChanged: _ai.updatePesuCredentials,
+                            codeExecutionBackend:
+                                _workspace.codeExecutionBackend,
+                            onCodeExecutionBackendChanged:
+                                _workspace.updateCodeExecutionBackend,
                           ),
                         ],
                       ),

@@ -168,8 +168,22 @@ class FileLibraryService {
 
   Future<void> deleteDocument(String documentPath) async {
     final file = File(documentPath);
-    if (await file.exists()) {
-      await file.delete();
+    if (!await file.exists()) {
+      return;
+    }
+    // A just-closed PdfViewerPanel's native pdfium file handle can take a
+    // moment longer than its own dispose() to actually release on
+    // Windows; retry briefly rather than surfacing a spurious
+    // "file in use" failure for what is otherwise a normal delete.
+    const maxAttempts = 5;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await file.delete();
+        return;
+      } on FileSystemException {
+        if (attempt == maxAttempts) rethrow;
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
     }
   }
 

@@ -4,6 +4,19 @@ StudyPDF is designed to make reading, annotating, and understanding your course 
 
 ---
 
+## 0. First Launch: Choosing Your Library Location
+
+The very first time you open StudyPDF, you'll be asked where your library — PDFs, notes, and imports — should be stored.
+
+- **Use the default location**: works out of the box, no action needed.
+- **Choose a Different Folder…**: pick any folder on your machine (e.g. a synced OneDrive/Drive folder).
+- You can change this later at any time from **Settings ⚙️ → Change Root Directory**.
+
+> [!NOTE]
+> If you're upgrading from an earlier version of StudyPDF and already had a library location configured, you won't see this screen again — your existing setup is carried over automatically.
+
+---
+
 ## 1. Main Folder Library
 The first screen you see is the **Document Library**, which acts as home base for all your study materials.
 
@@ -17,7 +30,7 @@ The first screen you see is the **Document Library**, which acts as home base fo
 ---
 
 ## 2. Managing PDF Viewer Section
-Your PDF viewer consists of 4 segments
+The PDF viewer is a real document viewport — independent zoom (25%–400%), scrolling, and page tracking based on each page's actual geometry — rather than an image stretched to fit the window. It consists of 4 segments
 
 - **Tab Segment**: Manage open documents and workspaces.
 - **PDF Workspace (Center)**: Your active document viewer.
@@ -45,8 +58,9 @@ To use the AI Assistant, you must configure an API key for your preferred provid
 
 1. Click the **Settings ⚙️** icon in the top right.
 2. Scroll to **AI Settings**.
-3. Choose your **Default Provider** (OpenAI, Groq, Gemini, or local Ollama). 
+3. Choose your **Default Provider** — **OpenRouter is the default and free**, giving you access to a rotating catalog of free-tier models with just one API key. OpenAI, Groq, Gemini, and local Ollama are also available if you prefer a direct key.
 4. Enter your API key for that provider and press Enter or the Save icon.
+5. If you picked OpenRouter, you can also choose which free model to use from the live-fetched model list.
 
 Once configured, simply highlight text in your PDF, or type a question directly into the Assistant panel like *"Can you simplify this page for me?"*
 
@@ -73,11 +87,29 @@ As you read and annotate PDFs, your notes are saved page-by-page. StudyPDF allow
    - Export Note as a pdf or a markdown(.md)
    - Delete note
 
-## 6. Course Downloader
-StudyPDF includes a built-in module for fetching course materials directly.
-1. Click the **Download 📥** icon on the left navigation rail.
-2. Enter your credentials in the Settings page if you haven't already.
-3. Click "Fetch Courses" and select the materials you need. They will be downloaded and automatically imported into your local library.
+## 6. Handwritten Notes (Photo Import)
+Turn a photo of a handwritten (or printed) note page into a real, editable note.
+
+1. In the note editor, use the **Import handwritten note** option and select or paste a photo.
+2. StudyPDF transcribes the legible text using a free vision-capable AI model.
+3. Review the transcribed text (and any diagram detected as non-text content) before inserting — nothing is inserted automatically without your confirmation, since transcription isn't always perfect.
+4. Once confirmed, the text is inserted as normal, editable markdown; any diagram is kept as an attached image.
+
+## 7. Embedded Code Terminal
+Test code from a textbook example without leaving the app.
+
+1. Open the **Code Terminal** panel from the workspace.
+2. Pick a language (Python, JavaScript, Java, or C++), write or paste code, and press **Run**.
+3. By default, code runs via **Piston** (a free external execution service) — no local install needed.
+4. If you'd rather nothing leave your machine, switch to **Local execution** in **Settings ⚙️ → Code Execution**, which uses whatever interpreter/compiler is already installed on your computer.
+
+## 8. Course Downloader (Optional)
+StudyPDF includes an optional module for fetching PESU course materials directly. It's **off by default** — most users aren't PESU students — so you'll need to turn it on first.
+
+1. Go to **Settings ⚙️** and enable **PESU Course Downloader**. A new **Download 📥** icon appears on the left navigation rail.
+2. Click the **Download 📥** icon.
+3. Enter your PESU credentials in the Settings page if you haven't already.
+4. Click "Fetch Courses" and select the materials you need. They will be downloaded and automatically imported into your local library.
 
 
 Thanks for trying it out!!

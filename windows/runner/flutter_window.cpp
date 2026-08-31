@@ -2,7 +2,17 @@
 
 #include <optional>
 
+#include <flutter/encodable_value.h>
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
+
 #include "flutter/generated_plugin_registrant.h"
+
+namespace {
+// Must match the channel name used in
+// lib/core/native/window_constraints_channel.dart.
+constexpr char kWindowConstraintsChannel[] = "studypdf/window";
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -26,6 +36,46 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  // Lets Dart lower/restore the window's minimum trackable size at
+  // runtime (e.g. when a collapsible side panel is hidden, the layout
+  // needs less width to stay usable). See win32_window.cpp's
+  // WM_GETMINMAXINFO handler for where this takes effect.
+  auto window_constraints_channel =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          kWindowConstraintsChannel,
+          &flutter::StandardMethodCodec::GetInstance());
+  window_constraints_channel->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "setMinSize") {
+          result->NotImplemented();
+          return;
+        }
+        const auto* args =
+            std::get_if<flutter::EncodableMap>(call.arguments());
+        if (args == nullptr) {
+          result->Error("bad_args", "Expected a map with width/height");
+          return;
+        }
+        auto width_it = args->find(flutter::EncodableValue("width"));
+        auto height_it = args->find(flutter::EncodableValue("height"));
+        if (width_it == args->end() || height_it == args->end()) {
+          result->Error("bad_args", "Missing width or height");
+          return;
+        }
+        const double* width = std::get_if<double>(&width_it->second);
+        const double* height = std::get_if<double>(&height_it->second);
+        if (width == nullptr || height == nullptr) {
+          result->Error("bad_args", "width/height must be numbers");
+          return;
+        }
+        this->SetMinSize(static_cast<unsigned int>(*width),
+                         static_cast<unsigned int>(*height));
+        result->Success();
+      });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();

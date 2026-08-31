@@ -8,5 +8,6 @@ abstract class AIProvider {
     required String prompt,
     required String context,
     String? apiKey,
+    String? model,
   });
 }

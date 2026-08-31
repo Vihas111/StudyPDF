@@ -153,6 +153,11 @@ bool Win32Window::Show() {
   return ShowWindow(window_handle_, SW_SHOWNORMAL);
 }
 
+void Win32Window::SetMinSize(unsigned int width, unsigned int height) {
+  min_width_ = width;
+  min_height_ = height;
+}
+
 // static
 LRESULT CALLBACK Win32Window::WndProc(HWND const window,
                                       UINT const message,
@@ -216,6 +221,23 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_DWMCOLORIZATIONCOLORCHANGED:
       UpdateTheme(hwnd);
       return 0;
+
+    case WM_GETMINMAXINFO: {
+      // Below this, the workspace layout (fixed-width nav rail + folder
+      // panel) has nowhere left to shrink and starts overflowing rather
+      // than reflowing — see the in-app responsive fallbacks in
+      // document_library_page.dart/study_workspace_page.dart for the
+      // "still too narrow" safety net above this floor. min_width_ is
+      // lowered at runtime (via SetMinSize, called from Dart over a
+      // platform channel) when the Home screen's folder side panel is
+      // collapsed, since that removes most of the width pressure.
+      UINT dpi = GetDpiForWindow(hwnd);
+      double scale_factor = dpi / 96.0;
+      auto info = reinterpret_cast<MINMAXINFO*>(lparam);
+      info->ptMinTrackSize.x = Scale(min_width_, scale_factor);
+      info->ptMinTrackSize.y = Scale(min_height_, scale_factor);
+      return 0;
+    }
   }
 
   return DefWindowProc(window_handle_, message, wparam, lparam);

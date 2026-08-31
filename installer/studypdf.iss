@@ -1,5 +1,5 @@
 #define MyAppName "StudyPDF"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "StudyPDF"
 #define MyAppExeName "studypdf.exe"
 #define MySourceRoot "..\\build\\installer\\stage"

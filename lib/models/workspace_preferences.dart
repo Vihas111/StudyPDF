@@ -7,6 +7,7 @@ class WorkspacePreferences {
     this.startWithAiVisible = true,
     this.startWithNotesVisible = true,
     this.bottomPanelSpansEntireWidth = true,
+    this.enablePesuDownloader = false,
   });
 
   final PanelDockPosition aiDockPosition;
@@ -14,6 +15,10 @@ class WorkspacePreferences {
   final bool startWithAiVisible;
   final bool startWithNotesVisible;
   final bool bottomPanelSpansEntireWidth;
+  // Off by default: most users of this app aren't PESU students, so the
+  // course downloader is an opt-in module rather than a fixture of the
+  // core app (Phase 4b).
+  final bool enablePesuDownloader;
 
   WorkspacePreferences copyWith({
     PanelDockPosition? aiDockPosition,
@@ -21,6 +26,7 @@ class WorkspacePreferences {
     bool? startWithAiVisible,
     bool? startWithNotesVisible,
     bool? bottomPanelSpansEntireWidth,
+    bool? enablePesuDownloader,
   }) {
     return WorkspacePreferences(
       aiDockPosition: aiDockPosition ?? this.aiDockPosition,
@@ -30,6 +36,7 @@ class WorkspacePreferences {
           startWithNotesVisible ?? this.startWithNotesVisible,
       bottomPanelSpansEntireWidth:
           bottomPanelSpansEntireWidth ?? this.bottomPanelSpansEntireWidth,
+      enablePesuDownloader: enablePesuDownloader ?? this.enablePesuDownloader,
     );
   }
 }

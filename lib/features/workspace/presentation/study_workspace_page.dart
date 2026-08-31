@@ -1,8 +1,11 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:studypdf/core/ai/ai_provider.dart';
+import 'package:studypdf/core/ai/ocr_service.dart';
 import 'package:studypdf/features/ai_assistant/presentation/ai_assistant_panel.dart';
+import 'package:studypdf/features/code_terminal/presentation/code_terminal_panel.dart';
 import 'package:studypdf/features/notes/presentation/page_notes_panel.dart';
 import 'package:studypdf/features/pdf_viewer/presentation/pdf_viewer_panel.dart';
 import 'package:studypdf/features/tabs/presentation/tab_strip.dart';
@@ -39,6 +42,8 @@ class StudyWorkspacePage extends StatefulWidget {
     required this.onMergeGroupNotes,
     required this.onSaveMergedNote,
     required this.onRenameMergedNote,
+    required this.onTranscribeHandwriting,
+    required this.onSaveNoteImage,
     required this.onOpenExternalAiWindow,
     required this.onOpenExternalNotesWindow,
     required this.aiDockPosition,
@@ -54,6 +59,8 @@ class StudyWorkspacePage extends StatefulWidget {
     required this.onSyncHomeShortcutByName,
     required this.shortcutLaunchRequest,
     required this.onShortcutLaunchConsumed,
+    required this.codeExecutionBackend,
+    required this.onCodeExecutionBackendChanged,
   });
 
   final List<PdfDocument> openTabs;
@@ -78,6 +85,13 @@ class StudyWorkspacePage extends StatefulWidget {
   final void Function(String groupName, List<String> tabIds) onMergeGroupNotes;
   final ValueChanged<String> onSaveMergedNote;
   final void Function(String noteId, String newTitle) onRenameMergedNote;
+  final Future<HandwritingTranscription> Function(
+    Uint8List imageBytes,
+    String mimeType,
+  )
+  onTranscribeHandwriting;
+  final Future<String> Function(Uint8List imageBytes, String extension)
+  onSaveNoteImage;
   final Future<void> Function() onOpenExternalAiWindow;
   final Future<void> Function() onOpenExternalNotesWindow;
   final PanelDockPosition aiDockPosition;
@@ -104,6 +118,8 @@ class StudyWorkspacePage extends StatefulWidget {
   onSyncHomeShortcutByName;
   final ShortcutLaunchRequest? shortcutLaunchRequest;
   final ValueChanged<int> onShortcutLaunchConsumed;
+  final String codeExecutionBackend;
+  final ValueChanged<String> onCodeExecutionBackendChanged;
 
   @override
   State<StudyWorkspacePage> createState() => _StudyWorkspacePageState();
@@ -116,6 +132,7 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
 
   late bool _aiVisible;
   late bool _notesVisible;
+  bool _codeTerminalVisible = false;
   _PanelMode _aiMode = _PanelMode.docked;
   _PanelMode _notesMode = _PanelMode.docked;
   final List<TabGroup> _tabGroups = [];
@@ -178,6 +195,7 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
       _topPanelRatio = 0.66;
       _aiVisible = widget.defaultAiVisible;
       _notesVisible = widget.defaultNotesVisible;
+      _codeTerminalVisible = false;
       _aiMode = _PanelMode.docked;
       _notesMode = _PanelMode.docked;
       _aiOffset = const Offset(360, 120);
@@ -679,6 +697,10 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
       initialProviderId: widget.activeAiProviderId,
       onProviderChanged: widget.onAiProviderChanged,
     );
+    final codeTerminalPanel = CodeTerminalPanel(
+      backend: widget.codeExecutionBackend,
+      onBackendChanged: widget.onCodeExecutionBackendChanged,
+    );
     final notesPanel = PageNotesPanel(
       pageNumber: widget.viewportData.currentPage,
       annotations: widget.pageAnnotations,
@@ -690,6 +712,8 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
             note: widget.activeMergedNote!,
             onSave: widget.onSaveMergedNote,
             onRename: (newTitle) => widget.onRenameMergedNote(widget.activeMergedNote!.id, newTitle),
+            onTranscribeHandwriting: widget.onTranscribeHandwriting,
+            onSaveNoteImage: widget.onSaveNoteImage,
           )
         : PdfViewerPanel(
             key: ValueKey('pdf-${widget.activeDocument!.id}'),
@@ -775,6 +799,19 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
                   _notesVisible
                       ? Icons.sticky_note_2
                       : Icons.sticky_note_2_outlined,
+                ),
+              ),
+              IconButton(
+                tooltip: _codeTerminalVisible
+                    ? 'Hide Code Terminal'
+                    : 'Show Code Terminal',
+                onPressed: () {
+                  setState(() {
+                    _codeTerminalVisible = !_codeTerminalVisible;
+                  });
+                },
+                icon: Icon(
+                  _codeTerminalVisible ? Icons.terminal : Icons.terminal_outlined,
                 ),
               ),
               IconButton(
@@ -879,6 +916,7 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
                   pdfPanel: pdfPanel,
                   aiPanel: aiPanel,
                   notesPanel: notesPanel,
+                  codeTerminalPanel: codeTerminalPanel,
                   aiDocked: aiDocked,
                   notesDocked: notesDocked,
                 );
@@ -957,6 +995,7 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
     required Widget pdfPanel,
     required Widget aiPanel,
     required Widget notesPanel,
+    required Widget codeTerminalPanel,
     required bool aiDocked,
     required bool notesDocked,
   }) {
@@ -997,6 +1036,13 @@ class _StudyWorkspacePageState extends State<StudyWorkspacePage> {
         }
       }
       addDockedPanel(notesPanel, notesPosition);
+    }
+    if (_codeTerminalVisible) {
+      // Always bottom-docked — kept simple (no configurable dock position
+      // or pop-out support yet) since this is a first pass; _buildDockStack
+      // already supports stacking multiple panels in one slot, so this
+      // coexists fine with a bottom-docked AI/Notes panel too.
+      bottomPanels.add(codeTerminalPanel);
     }
 
     return _buildDockedLayout(

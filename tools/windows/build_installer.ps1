@@ -7,19 +7,19 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 Set-Location $root
 
-$releaseDir        = Join-Path $root "build\windows\x64\runner\Release"
-$stageDir          = Join-Path $root "build\installer\stage"
-$distDir           = Join-Path $root "build\installer\dist"
-$downloaderDir     = Join-Path $root "pesu_course_downloader"
+$releaseDir = Join-Path $root "build\windows\x64\runner\Release"
+$stageDir = Join-Path $root "build\installer\stage"
+$distDir = Join-Path $root "build\installer\dist"
+$downloaderDir = Join-Path $root "pesu_course_downloader"
 $stageDownloaderDir = Join-Path $stageDir "pesu_course_downloader"
 
 # ── Clean ISS Scripts ───────────────────────────────────────────────
 $issInstaller = Join-Path $root "installer\studypdf_installer.iss"
-$issUpdater   = Join-Path $root "installer\studypdf_updater.iss"
+$issUpdater = Join-Path $root "installer\studypdf_updater.iss"
 
 # ────────────────────────────────────────────────────────────────────
 if (-not $SkipBuild) {
-  Write-Host "Building Windows release for v1.2.0..."
+  Write-Host "Building Windows release for v2.0.0..."
   flutter build windows --release
 }
 
@@ -101,5 +101,5 @@ if ($LASTEXITCODE -ne 0) { throw "Updater compile failed (exit $LASTEXITCODE)" }
 
 Write-Host ""
 Write-Host "Done! Both installers are in: $distDir"
-Write-Host "  StudyPDF-Setup-v1.2.0.exe  (full install)"
-Write-Host "  StudyPDF-Updater-v1.2.0.exe (patch for existing installs to arrive at 1.2.0)"
+Write-Host "  StudyPDF-Setup-v2.0.0.exe  (full install)"
+Write-Host "  StudyPDF-Updater-v2.0.0.exe (patch for existing installs to arrive at 2.0.0)"
